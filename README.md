@@ -24,7 +24,15 @@ tws create backups       # remember windows on the current workspace
 tws list
 tws backups show         # inspect the saved snapshot
 tws --help
+tws configure backups   # terminal wizard; creates a snapshot if needed
+tws configure backups --open Super+B
+tws configure --launcher Control+Alt+Super+W
 ```
+
+`tws configure` prompts for a workspace ID. Its shortcut opens that CLI in Kitty
+(override the terminal program with `TWS_TERMINAL`). The open shortcut restores
+and focuses its saved workspace. `_activate ID` is the internal hotkey handler.
+No shortcuts are assigned until you configure them.
 
 Snapshots live in `${XDG_CONFIG_HOME:-~/.config}/task-workspaces/ID.json` with
 private permissions; `TWS_CONFIG_HOME` overrides that directory. Window frames
