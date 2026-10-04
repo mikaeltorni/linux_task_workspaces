@@ -1,0 +1,17 @@
+[package]
+name = "linux_task_workspaces"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Remember GNOME task window layouts and tmux sessions"
+
+[[bin]]
+name = "tws"
+path = "src/main.rs"
+
+[dependencies]
+serde_json = "1.0"
+zbus = "4.4"
+
+[dev-dependencies]
+tempfile = "3"
