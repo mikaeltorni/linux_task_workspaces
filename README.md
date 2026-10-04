@@ -58,6 +58,7 @@ before replacing the saved profile. `TWS_COMMAND=tasks bash install.sh` installs
 an additional `tasks` command; `tws` remains available for service compatibility.
 
 New task slots are appended after existing workspaces and named `Task: ID`;
+GNOME supports 36 static workspaces in total; creation rejects exhausted slots.
 creation preserves the snapshot's source workspace, reserving the new slot until
 opened. Static workspace count is retained, and workspaces span all monitors.
 The `task-workspaces.service` reconciles permanent slots and `always` windows

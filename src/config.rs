@@ -41,8 +41,8 @@ pub fn validate(profile: &Value, id: &str) -> Result<()> {
     if text(profile, "id") != id || profile["version"] != 1 {
         return Err("Profile ID/version must match".into());
     }
-    if !profile["workspace"].as_u64().is_some_and(|i| i <= 127) {
-        return Err("Workspace must be an integer 0–127".into());
+    if !profile["workspace"].as_u64().is_some_and(|i| i <= 35) {
+        return Err("Workspace must be an integer 0–35 (GNOME supports 36)".into());
     }
     if !["always", "on-demand"].contains(&text(profile, "mode")) {
         return Err("Mode must be always or on-demand".into());

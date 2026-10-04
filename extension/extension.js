@@ -11,17 +11,21 @@ const XML = `<node><interface name="org.gnome.Shell.Extensions.TaskWorkspaces">
 
 export default class TaskWorkspaces extends Extension {
     enable() {
+        this._enabled = true;
         this._connectors = new Map();
+        this._monitorManager = global.backend.get_monitor_manager();
+        this._monitorSignal = this._monitorManager.connect('monitors-changed', () => this._refreshMonitors());
         this._refreshMonitors();
-        this._monitorSignal = global.display.connect('monitors-changed', () => this._refreshMonitors());
         this._bus = Gio.DBusExportedObject.wrapJSObject(XML, this);
         this._bus.export(Gio.DBus.session, '/org/gnome/Shell/Extensions/TaskWorkspaces');
     }
 
     disable() {
+        this._enabled = false;
         if (this._monitorSignal)
-            global.display.disconnect(this._monitorSignal);
+            this._monitorManager.disconnect(this._monitorSignal);
         this._monitorSignal = null;
+        this._monitorManager = null;
         this._bus?.unexport();
         this._bus = null;
     }
@@ -30,6 +34,8 @@ export default class TaskWorkspaces extends Extension {
         Gio.DBus.session.call('org.gnome.Mutter.DisplayConfig', '/org/gnome/Mutter/DisplayConfig',
             'org.gnome.Mutter.DisplayConfig', 'GetCurrentState', null, null,
             Gio.DBusCallFlags.NONE, -1, null, (connection, result) => {
+                if (!this._enabled)
+                    return;
                 try {
                     const state = connection.call_finish(result).deep_unpack();
                     const manager = global.backend.get_monitor_manager();
@@ -76,8 +82,8 @@ export default class TaskWorkspaces extends Extension {
         try {
             const a = JSON.parse(raw);
             if (a.op === 'ensure') {
-                if (!Number.isInteger(a.workspace) || a.workspace < 0 || a.workspace > 127)
-                    throw new Error('Workspace index must be 0–127');
+                if (!Number.isInteger(a.workspace) || a.workspace < 0 || a.workspace > 35)
+                    throw new Error('Workspace index must be 0–35 (GNOME supports 36 workspaces)');
                 const count = Math.max(global.workspace_manager.n_workspaces, a.workspace + 1);
                 const mutter = new Gio.Settings({schema_id: 'org.gnome.mutter'});
                 const preferences = new Gio.Settings({schema_id: 'org.gnome.desktop.wm.preferences'});
