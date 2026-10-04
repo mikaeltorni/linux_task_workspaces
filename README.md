@@ -40,6 +40,8 @@ tws backups edit --file /path/to/profile.json
 TWS_EDIT_ID=backups tws
 tws configure backups --launch 0 '["nautilus","--new-window","/home/mk/My Backups"]'
 tws backups save          # replace snapshot from the task's permanent workspace
+tws backups load          # open or reuse windows and restore monitor placement
+TWS_LOAD_ID=backups tws
 ```
 
 `tws configure` prompts for a workspace ID. Its shortcut opens that CLI in Kitty

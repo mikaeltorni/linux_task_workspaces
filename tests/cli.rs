@@ -16,6 +16,9 @@
 // folder_contract; invalid argv/index preserves profile -> folder_contract.
 // Save replaces task-only normal windows, retains settings/folders and browser
 // profile/URL per window, preserves prior snapshot on capture ambiguity -> save_contract.
+// Public load reuses two windows, opens two missing same-app windows separately,
+// repeated load launches no duplicates, missing/extra args preserve profile,
+// concurrent command is rejected without mutation -> load_contract / launch_contract.
 use linux_task_workspaces::{run, Bridge, Result, Store};
 use serde_json::{json, Value};
 use std::cell::RefCell;
@@ -108,7 +111,7 @@ fn rejections() {
         vec!["list", "extra"],
         vec!["create"],
         vec!["a", "save", "extra"],
-        vec!["a", "load"],
+        vec!["a", "load", "extra"],
     ] {
         assert!(call(&args, &store, &desktop).is_err());
         assert_eq!(
@@ -587,4 +590,104 @@ fn save_contract() {
         store.read("backup").unwrap()["windows"][0]["launch"][2],
         "https://drive.google.com/"
     );
+}
+
+#[test]
+fn load_contract() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = Store {
+        root: temp.path().join("profiles"),
+    };
+    let desktop = Desktop::new();
+    call(&["create", "backup"], &store, &desktop).unwrap();
+    call(&["backup", "load"], &store, &desktop).unwrap();
+    call(&["backup", "load"], &store, &desktop).unwrap();
+    assert_eq!(
+        desktop
+            .actions
+            .borrow()
+            .iter()
+            .filter(|a| a["op"] == "place")
+            .count(),
+        4
+    );
+    let expected = call(&["backup", "show"], &store, &desktop).unwrap();
+    for args in [vec!["backup", "load", "extra"], vec!["missing", "load"]] {
+        assert!(call(&args, &store, &desktop).is_err());
+        assert_eq!(
+            call(&["backup", "show"], &store, &desktop).unwrap(),
+            expected
+        );
+    }
+    let lock = store.lock().unwrap();
+    assert!(call(&["backup", "load"], &store, &desktop).is_err());
+    assert_eq!(
+        call(&["backup", "show"], &store, &desktop).unwrap(),
+        expected
+    );
+    drop(lock);
+    let p = Command::new(env!("CARGO_BIN_EXE_tws"))
+        .env("TWS_CONFIG_HOME", &store.root)
+        .env("TWS_LOAD_ID", "missing")
+        .env_remove("TWS_EDIT_ID")
+        .output()
+        .unwrap();
+    assert!(!p.status.success());
+    assert!(String::from_utf8_lossy(&p.stderr).contains("Cannot read workspace missing"));
+    assert_eq!(
+        call(&["backup", "show"], &store, &desktop).unwrap(),
+        expected
+    );
+}
+
+#[test]
+fn launch_contract() {
+    struct Launcher {
+        state: RefCell<Value>,
+        launches: RefCell<Vec<Vec<String>>>,
+    }
+    impl Bridge for Launcher {
+        fn snapshot(&self) -> Result<Value> {
+            Ok(self.state.borrow().clone())
+        }
+        fn action(&self, a: Value) -> Result<Value> {
+            if a["op"] == "place" {
+                for w in self.state.borrow_mut()["windows"].as_array_mut().unwrap() {
+                    if w["id"] == a["id"] {
+                        w["workspace"] = a["workspace"].clone();
+                    }
+                }
+            }
+            Ok(json!({"ok":true}))
+        }
+        fn launch(&self, argv: &[String]) -> Result<()> {
+            self.launches.borrow_mut().push(argv.to_vec());
+            let n = self.launches.borrow().len();
+            let mut w = Desktop::new().snapshot()?["windows"][n - 1].clone();
+            w["id"] = json!(format!("new{n}"));
+            w["pid"] = json!(100 + n);
+            self.state.borrow_mut()["windows"]
+                .as_array_mut()
+                .unwrap()
+                .push(w);
+            Ok(())
+        }
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let store = Store {
+        root: temp.path().join("profiles"),
+    };
+    let desktop = Desktop::new();
+    call(&["create", "backup"], &store, &desktop).unwrap();
+    let mut state = desktop.snapshot().unwrap();
+    state["windows"] = json!([]);
+    let launcher = Launcher {
+        state: RefCell::new(state),
+        launches: RefCell::new(vec![]),
+    };
+    run(&["backup".into(), "load".into()], &store, &launcher).unwrap();
+    assert_eq!(launcher.launches.borrow().len(), 2);
+    assert_eq!(store.read("backup").unwrap()["windows"][0]["id"], "new1");
+    run(&["backup".into(), "load".into()], &store, &launcher).unwrap();
+    assert_eq!(launcher.launches.borrow().len(), 2);
 }

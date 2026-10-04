@@ -23,6 +23,9 @@ pub trait Bridge {
     fn conflicts(&self, chord: &str, id: &str, role: &str) -> Result<Vec<String>> {
         hotkeys::conflicts(chord, id, role)
     }
+    fn launch(&self, argv: &[String]) -> Result<()> {
+        spawn(argv)
+    }
 }
 
 pub struct Desktop;
@@ -65,6 +68,19 @@ pub struct Store {
 }
 
 impl Store {
+    pub fn lock(&self) -> Result<fs::File> {
+        fs::create_dir_all(&self.root)?;
+        fs::set_permissions(&self.root, fs::Permissions::from_mode(0o700))?;
+        let f = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .mode(0o600)
+            .open(self.root.join(".lock"))?;
+        fs2::FileExt::try_lock_exclusive(&f)
+            .map_err(|_| "Another task workspace operation is in progress; retry shortly")?;
+        Ok(f)
+    }
     pub fn environment() -> Self {
         let root = std::env::var_os("TWS_CONFIG_HOME")
             .map(PathBuf::from)
@@ -240,7 +256,7 @@ pub fn restore_windows(
         }
         if found.is_none() {
             let before: Vec<String> = current.iter().map(|w| text(w, "id").to_owned()).collect();
-            spawn(&command_argv(saved)?)?;
+            bridge.launch(&command_argv(saved)?)?;
             let timeout = std::env::var("TWS_WINDOW_TIMEOUT")
                 .unwrap_or_else(|_| "15".into())
                 .parse::<u64>()?;
@@ -282,9 +298,20 @@ pub fn restore_windows(
 }
 
 pub fn run(args: &[String], store: &Store, bridge: &dyn Bridge) -> Result<String> {
+    let readonly = args.is_empty()
+        || args == ["--help"]
+        || args == ["-h"]
+        || args == ["list"]
+        || args.get(1).is_some_and(|s| s == "show")
+        || args.first().is_some_and(|s| s == "conflicts");
+    let _lock = if readonly { None } else { Some(store.lock()?) };
+    dispatch(args, store, bridge)
+}
+
+fn dispatch(args: &[String], store: &Store, bridge: &dyn Bridge) -> Result<String> {
     let a: Vec<&str> = args.iter().map(String::as_str).collect();
     match a.as_slice() {
-        [] | ["--help"] | ["-h"] => Ok("tws create ID | list | ID show | ID hide | ID close\ntws configure [ID] [--open Super+B | --close Ctrl+Super+B | --mode always|on-demand | --close-action hide|close]\ntws configure --launcher Control+Alt+Super+W\ntws edit ID | ID edit [--json | --file PATH]\ntws conflicts HOTKEY\nTWS_EDIT_ID=ID tws\nRemember named GNOME task workspaces and tmux sessions.\n".into()),
+        [] | ["--help"] | ["-h"] => Ok("tws create ID | list | ID show | ID save | ID load | ID hide | ID close\ntws configure [ID] [--open Super+B | --close Ctrl+Super+B | --mode always|on-demand | --close-action hide|close]\ntws configure --launcher Control+Alt+Super+W\ntws edit ID | ID edit [--json | --file PATH]\ntws conflicts HOTKEY\ntws configure ID --launch INDEX JSON_ARGV\nTWS_EDIT_ID=ID tws | TWS_LOAD_ID=ID tws\nRemember named GNOME task workspaces and tmux sessions.\n".into()),
         ["configure", "--launcher", chord] => {
             let normalized = config::check_hotkey(store,bridge,"configuration","launcher",chord)?;
             let command = hotkeys::terminal(&[hotkeys::executable().to_string_lossy().into_owned(),"configure".into()]);
@@ -293,11 +320,11 @@ pub fn run(args: &[String], store: &Store, bridge: &dyn Bridge) -> Result<String
         },
         ["configure"] => {
             let id = hotkeys::prompt("Workspace ID", "")?;
-            run(&["configure".into(),id], store, bridge)
+            dispatch(&["configure".into(),id], store, bridge)
         },
         ["configure", id] => {
             let mut current = if store.path(id)?.exists() { store.read(id)? } else {
-                run(&["create".into(),(*id).into()],store,bridge)?;
+                dispatch(&["create".into(),(*id).into()],store,bridge)?;
                 store.read(id)?
             };
             let chord = hotkeys::prompt("Open hotkey (Super+B; - clears)",text(&current,"open_hotkey"))?;
@@ -318,10 +345,13 @@ pub fn run(args: &[String], store: &Store, bridge: &dyn Bridge) -> Result<String
             store.write(id,&profile)?;
             Ok(format!("Configured {id}: {normalized}\n"))
         },
-        ["_activate", id] => {
+        ["_activate", id] | [id,"load"] => {
             let mut profile = store.read(id)?;
+            config::validate(&profile,id)?;
             ensure(&profile,bridge)?;
-            let ids = restore_windows(&mut profile,bridge,true)?;
+            let result = restore_windows(&mut profile,bridge,true);
+            if result.is_err() {store.write(id,&profile)?;}
+            let ids=result?;
             profile["hidden"] = json!(false);
             store.write(id,&profile)?;
             Ok(format!("Opened {id}: {} windows\n",ids.len()))
@@ -355,9 +385,9 @@ pub fn run(args: &[String], store: &Store, bridge: &dyn Bridge) -> Result<String
             Ok(format!("{id}: {op} (tmux sessions preserved)\n"))
         },
         ["_startup"] => {
-            reconcile(store,bridge)?; Ok("Task workspaces reconciled\n".into())
+            reconcile_locked(store,bridge)?; Ok("Task workspaces reconciled\n".into())
         },
-        ["edit", id] | [id,"edit"] => run(&["configure".into(),(*id).into()],store,bridge),
+        ["edit", id] | [id,"edit"] => dispatch(&["configure".into(),(*id).into()],store,bridge),
         ["edit", id, "--json"] | [id,"edit","--json"] => config::edit_json(store,bridge,id),
         ["edit", id, "--file", file] | [id,"edit","--file",file] => config::apply(store,bridge,id,serde_json::from_str(&fs::read_to_string(file)?)?),
         ["conflicts", chord] => {
@@ -409,7 +439,7 @@ pub fn run(args: &[String], store: &Store, bridge: &dyn Bridge) -> Result<String
             Ok(format!("Remembered {id}: {} windows\n", profile["windows"].as_array().unwrap().len()))
         },
         [id, "show"] => Ok(format!("{}\n", serde_json::to_string_pretty(&store.read(id)?)?)),
-        _ => Err("Expected create ID, list, or ID show; run tws --help.".into()),
+        _ => Err("Unknown command or invalid arguments; run tws --help.".into()),
     }
 }
 
@@ -419,12 +449,21 @@ pub fn ensure(profile: &Value, bridge: &dyn Bridge) -> Result<()> {
 }
 
 pub fn reconcile(store: &Store, bridge: &dyn Bridge) -> Result<()> {
+    if store.list()?.is_empty() {
+        return Ok(());
+    }
+    let _lock = store.lock()?;
+    reconcile_locked(store, bridge)
+}
+
+fn reconcile_locked(store: &Store, bridge: &dyn Bridge) -> Result<()> {
     for mut p in store.list()? {
         ensure(&p, bridge)?;
         if p["mode"] == "always" && p["hidden"] != true {
-            restore_windows(&mut p, bridge, false)?;
+            let result = restore_windows(&mut p, bridge, false);
             let id = text(&p, "id").to_owned();
             store.write(&id, &p)?;
+            result?;
         }
     }
     Ok(())
