@@ -24,6 +24,30 @@ The installer declares those packages plus compiler prerequisites. For offline
 deployment, supply `TWS_BINARY=/path/to/prebuilt/tws TWS_INSTALL_OFFLINE=1`;
 this copies assets without downloading or touching desktop settings/services.
 
+For the backup workflow, first activate the GNOME bridge with a manual
+logout/login on Wayland. On a workspace containing the windows you want to save,
+arrange the two Chrome windows on your top monitor, open your folder windows,
+and attach your tmux sessions in Kitty. Then run:
+
+```sh
+tws create backups
+tws backups load        # moves the remembered windows into a new permanent slot
+tws backups save        # capture its arranged windows, Chrome URLs and tmux state
+tws configure backups  # choose free open/close hotkeys and the startup mode
+```
+
+Later, use your chosen open shortcut or `tws backups load`. After rearranging
+windows or changing tabs/folders, run `tws backups save` from any workspace;
+it saves the task's assigned slot. **Ctrl+Alt+Super+W** opens the configuration
+wizard. To edit an existing task, use `tws edit backups` or
+`TWS_EDIT_ID=backups tws`. The command can also be renamed during installation.
+
+The repository is local. The master setup chain accepts an existing sibling
+checkout or `TWS_REPO_SOURCE=/path/to/linux_task_workspaces` (a transferred Git
+checkout or bare repository) for a clean installation; no published GitHub
+remote is assumed. Its atomic installer uses the shared helper repository and
+the setup menu automatically selects tmux when required.
+
 ```sh
 tws create backups       # remember windows on the current workspace
 tws list
@@ -65,9 +89,9 @@ outside GNOME's settings registry. JSON edits use a private draft and validate
 before replacing the saved profile. `TWS_COMMAND=tasks bash install.sh` installs
 an additional `tasks` command; `tws` remains available for service compatibility.
 
-New task slots are appended after existing workspaces and named `Task: ID`;
+New task slots are appended after existing workspaces and named `Task: ID`.
 GNOME supports 36 static workspaces in total; creation rejects exhausted slots.
-creation preserves the snapshot's source workspace, reserving the new slot until
+Creation preserves the snapshot's source workspace, reserving the new slot until
 opened. Static workspace count is retained, and workspaces span all monitors.
 The `task-workspaces.service` reconciles permanent slots and `always` windows
 every 20 seconds without focusing them. `on-demand` windows open only when
@@ -82,7 +106,11 @@ are saved relative to named monitor connectors and scaled if resolution changes.
 Disconnected monitors fall back to a visible monitor. Sticky windows are excluded.
 Tmux clients are linked to their terminal process; saved sessions record their
 socket, names, windows, panes, directories and layout. Running processes are not
-replayed after reboot.
+replayed after reboot. Tmux retains your running compression/upload jobs while
+you hide a workspace; after reboot, session structure and directories can be
+recreated, but commands such as `za` must be started again. Terminal windows
+that share one process may expose several attached sessions; those structures
+are saved, and the first session is attached when reopening that window.
 
 `save` captures every normal non-sticky window in the task's permanent slot,
 including Chrome/Chromium windows and attached tmux clients. Chrome tabs are
@@ -110,3 +138,5 @@ No installer terminates or restarts your session.
 Checks: `cargo test --locked`, `cargo clippy --locked --all-targets -- -D warnings`,
 `cargo fmt --check`, and `node --test tests/*.test.mjs`. Tests isolate the desktop,
 tmux server and installation home.
+
+MIT licensed; see [LICENSE](LICENSE).
