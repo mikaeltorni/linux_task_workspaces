@@ -14,6 +14,8 @@
 // unchanged-state -> gsettings_contract (isolated shell runner).
 // Per-window file-manager folder capture and explicit argv including spaces ->
 // folder_contract; invalid argv/index preserves profile -> folder_contract.
+// Save replaces task-only normal windows, retains settings/folders and browser
+// profile/URL per window, preserves prior snapshot on capture ambiguity -> save_contract.
 use linux_task_workspaces::{run, Bridge, Result, Store};
 use serde_json::{json, Value};
 use std::cell::RefCell;
@@ -105,7 +107,7 @@ fn rejections() {
         vec!["unknown"],
         vec!["list", "extra"],
         vec!["create"],
-        vec!["a", "save"],
+        vec!["a", "save", "extra"],
         vec!["a", "load"],
     ] {
         assert!(call(&args, &store, &desktop).is_err());
@@ -499,4 +501,90 @@ fn folder_contract() {
             expected
         );
     }
+}
+
+#[test]
+fn save_contract() {
+    struct SavedDesktop {
+        state: RefCell<Value>,
+    }
+    impl Bridge for SavedDesktop {
+        fn snapshot(&self) -> Result<Value> {
+            Ok(self.state.borrow().clone())
+        }
+        fn action(&self, _: Value) -> Result<Value> {
+            Ok(json!({"ok":true}))
+        }
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let store = Store {
+        root: temp.path().join("profiles"),
+    };
+    let desktop = Desktop::new();
+    call(&["create", "backup"], &store, &desktop).unwrap();
+    call(
+        &["configure", "backup", "--open", "Super+B"],
+        &store,
+        &desktop,
+    )
+    .unwrap();
+    let mut state = desktop.snapshot().unwrap();
+    state["windows"][0]["workspace"] = json!(8);
+    state["windows"][0]["class"] = json!("Google-chrome");
+    state["windows"][0]["title"] = json!("Drive - Google Chrome");
+    state["windows"][0]["app"] = json!("google-chrome.desktop");
+    state["chrome_sessions"] = json!([{"session_id":7,"program":"google-chrome","profile":"Profile 1","user_data_dir":"/home/test/.config/google-chrome",
+        "rect":[0,-1080,960,1080],"urls":["https://drive.google.com/drive/u/0/"],"titles":["Drive"],"active_title":"Drive"}]);
+    let saved = SavedDesktop {
+        state: RefCell::new(state),
+    };
+    run(&["backup".into(), "save".into()], &store, &saved).unwrap();
+    let p: Value =
+        serde_json::from_str(&run(&["backup".into(), "show".into()], &store, &saved).unwrap())
+            .unwrap();
+    assert_eq!(p["windows"].as_array().unwrap().len(), 1);
+    assert_eq!(p["open_hotkey"], "<Super>b");
+    assert_eq!(
+        p["windows"][0]["launch"],
+        json!([
+            "google-chrome",
+            "--new-window",
+            "--user-data-dir=/home/test/.config/google-chrome",
+            "--profile-directory=Profile 1",
+            "https://drive.google.com/drive/u/0/"
+        ])
+    );
+    let expected = run(&["backup".into(), "show".into()], &store, &saved).unwrap();
+    saved.state.borrow_mut()["chrome_sessions"] = json!([]);
+    assert!(run(&["backup".into(), "save".into()], &store, &saved).is_err());
+    assert_eq!(
+        run(&["backup".into(), "show".into()], &store, &saved).unwrap(),
+        expected
+    );
+    saved.state.borrow_mut()["chrome_sessions"] = json!([
+        p["windows"][0]["browser"].clone(),
+        p["windows"][0]["browser"].clone()
+    ]);
+    assert!(run(&["backup".into(), "save".into()], &store, &saved).is_err());
+    assert_eq!(
+        run(&["backup".into(), "show".into()], &store, &saved).unwrap(),
+        expected
+    );
+    call(
+        &[
+            "configure",
+            "backup",
+            "--launch",
+            "0",
+            r#"["google-chrome","--new-window","https://drive.google.com/"]"#,
+        ],
+        &store,
+        &desktop,
+    )
+    .unwrap();
+    run(&["backup".into(), "save".into()], &store, &saved).unwrap();
+    assert_eq!(
+        store.read("backup").unwrap()["windows"][0]["launch"][2],
+        "https://drive.google.com/"
+    );
 }

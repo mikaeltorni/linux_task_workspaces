@@ -39,6 +39,7 @@ tws backups edit --json     # $TWS_EDITOR / $EDITOR / nano
 tws backups edit --file /path/to/profile.json
 TWS_EDIT_ID=backups tws
 tws configure backups --launch 0 '["nautilus","--new-window","/home/mk/My Backups"]'
+tws backups save          # replace snapshot from the task's permanent workspace
 ```
 
 `tws configure` prompts for a workspace ID. Its shortcut opens that CLI in Kitty
@@ -70,7 +71,18 @@ are saved relative to named monitor connectors and scaled if resolution changes.
 Disconnected monitors fall back to a visible monitor. Sticky windows are excluded.
 Tmux clients are linked to their terminal process; saved sessions record their
 socket, names, windows, panes, directories and layout. Running processes are not
-replayed after reboot. Browser URLs are not yet captured.
+replayed after reboot.
+
+`save` captures every normal non-sticky window in the task's permanent slot,
+including Chrome/Chromium windows and attached tmux clients. Chrome tabs are
+read from its local SNSS v1/v3 session files, matched by current title and saved
+geometry, and reopened as separate windows with the same profile and tab URLs.
+There is no remote-debugging port or browser restart. Chrome can delay disk
+flushes; retry save after a few seconds if needed. Incognito, encrypted session
+formats and ambiguous window matches require an explicit URL argv via
+`configure ID --launch INDEX JSON_ARGV`; failed capture preserves the last save.
+Manual launch commands survive subsequent saves. `create` initially remembers
+window identities; Chrome URL capture happens when you save the arranged task.
 
 Nautilus folders are captured through its `OpenWindowsWithLocations` D-Bus
 property and matched to GNOME's GTK window object path, preserving each window's
