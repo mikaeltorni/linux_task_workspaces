@@ -23,6 +23,8 @@ Runtime needs tmux, GTK's `gtk-launch`, Kitty (or `TWS_TERMINAL`), and GNOME.
 The installer declares those packages plus compiler prerequisites. For offline
 deployment, supply `TWS_BINARY=/path/to/prebuilt/tws TWS_INSTALL_OFFLINE=1`;
 this copies assets without downloading or touching desktop settings/services.
+Offline installation also needs the shared helpers present as a sibling or
+through `ISC_FUNCTIONS_DIR=/path/to/linux_installation_scripts_functions`.
 
 For the backup workflow, first activate the GNOME bridge with a manual
 logout/login on Wayland. On a workspace containing the windows you want to save,
