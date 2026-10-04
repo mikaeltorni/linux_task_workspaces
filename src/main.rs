@@ -3,6 +3,8 @@ fn main() {
     if args.is_empty() {
         if let Ok(id) = std::env::var("TWS_EDIT_ID") {
             args = vec!["edit".into(), id];
+        } else if let Ok(id) = std::env::var("TWS_LOAD_ID") {
+            args = vec![id, "load".into()];
         }
     }
     let store = linux_task_workspaces::Store::environment();
