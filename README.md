@@ -52,7 +52,10 @@ TWS_LOAD_ID=backups tws
 `tws configure` prompts for a workspace ID. Its shortcut opens that CLI in Kitty
 (override the terminal program with `TWS_TERMINAL`). The open shortcut restores
 and focuses its saved workspace. `_activate ID` is the internal hotkey handler.
-No shortcuts are assigned until you configure them.
+Installation assigns **Ctrl+Alt+Super+W** to this configuration wizard if free,
+preserving an existing launcher on reinstall. Use `TWS_CONFIG_HOTKEY=CHORD` to
+choose another install-time key or `TWS_CONFIG_HOTKEY=none` to skip registration.
+Task open/close shortcuts are assigned when you configure each task.
 
 Every assigned shortcut is normalized and checked against GNOME settings,
 registered custom shortcuts, installed GNOME extension schemas, and other saved
