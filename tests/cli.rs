@@ -179,6 +179,12 @@ fn rejections() {
 
 #[test]
 fn installed_entrypoint() {
+    assert!(Command::new("bash")
+        .arg("tests/installer_contract.sh")
+        .arg(env!("CARGO_BIN_EXE_tws"))
+        .status()
+        .unwrap()
+        .success());
     let temp = tempfile::tempdir().unwrap();
     let framework = temp.path().join("framework");
     std::fs::create_dir(&framework).unwrap();

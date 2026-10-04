@@ -17,7 +17,12 @@ Install: `bash install.sh` (also `--default` / `--all`). The installer uses the
 shared installer helpers from a sibling checkout or downloads them. User mode
 reports exact sudo commands for missing packages; sudo targets the desktop user.
 The public entrypoint is the compiled binary `~/.local/bin/tws`. Building requires
-a current Rust toolchain; runtime needs tmux, GTK's `gtk-launch`, and GNOME.
+a Rust 1.85+ toolchain. A missing toolchain is bootstrapped with rustup into the
+desktop user's home; an existing older toolchain needs `rustup update stable`.
+Runtime needs tmux, GTK's `gtk-launch`, Kitty (or `TWS_TERMINAL`), and GNOME.
+The installer declares those packages plus compiler prerequisites. For offline
+deployment, supply `TWS_BINARY=/path/to/prebuilt/tws TWS_INSTALL_OFFLINE=1`;
+this copies assets without downloading or touching desktop settings/services.
 
 ```sh
 tws create backups       # remember windows on the current workspace
