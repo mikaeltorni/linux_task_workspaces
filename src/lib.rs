@@ -434,6 +434,7 @@ fn dispatch(args: &[String], store: &Store, bridge: &dyn Bridge) -> Result<Strin
             let slot = snapshot["count"].as_i64().ok_or("Invalid workspace count")?.max(highest);
             profile["version"] = json!(1); profile["id"] = json!(id); profile["workspace"] = json!(slot);
             profile["mode"] = json!("on-demand"); profile["close_action"] = json!("hide"); profile["hidden"] = json!(false);
+            config::validate(&profile,id)?;
             ensure(&profile,bridge)?;
             store.write(id, &profile)?;
             Ok(format!("Remembered {id}: {} windows\n", profile["windows"].as_array().unwrap().len()))

@@ -26,11 +26,13 @@ use std::process::Command;
 
 struct Desktop {
     actions: RefCell<Vec<Value>>,
+    count: i64,
 }
 impl Desktop {
     fn new() -> Self {
         Self {
             actions: RefCell::new(vec![]),
+            count: 8,
         }
     }
 }
@@ -49,7 +51,7 @@ impl Bridge for Desktop {
         Ok(())
     }
     fn snapshot(&self) -> Result<Value> {
-        Ok(json!({"active":2,"count":8,
+        Ok(json!({"active":2,"count":self.count,
         "monitors":[{"index":0,"connector":"DP-1","x":0,"y":-1080,"width":1920,"height":1080}],
         "windows":[{"id":"42","pid":0,"workspace":2,"app":"kitty.desktop","class":"kitty","title":"backups","monitor":"DP-1","rect":[0,-1080,960,1080]},
                    {"id":"43","pid":0,"workspace":2,"app":"kitty.desktop","class":"kitty","title":"other","monitor":"DP-1","rect":[960,-1080,960,1080]}]}))
@@ -58,6 +60,50 @@ impl Bridge for Desktop {
         self.actions.borrow_mut().push(action);
         Ok(json!({"ok":true}))
     }
+}
+
+// Coverage: GNOME's last supported slot succeeds; exhaustion leaves the earlier
+// profile and public list unchanged, without sending a desktop action.
+#[test]
+fn workspace_limit() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = Store {
+        root: temp.path().join("profiles"),
+    };
+    let mut desktop = Desktop::new();
+    desktop.count = 35;
+    call(&["create", "last"], &store, &desktop).unwrap();
+    let expected = call(&["last", "show"], &store, &desktop).unwrap();
+    assert!(expected.contains("35"));
+    let list = call(&["list"], &store, &desktop).unwrap();
+    let actions = desktop.actions.borrow().len();
+    assert!(call(&["create", "overflow"], &store, &desktop).is_err());
+    assert_eq!(call(&["last", "show"], &store, &desktop).unwrap(), expected);
+    assert_eq!(call(&["list"], &store, &desktop).unwrap(), list);
+    assert_eq!(desktop.actions.borrow().len(), actions);
+}
+
+// Coverage: rapidly forked subprocesses cannot retain a completed operation's
+// flock. Repeated successful public mutations must retain the seeded profile.
+#[test]
+fn lock_release_during_process_launches() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = Store { root: temp.path().join("profiles") };
+    let desktop = Desktop::new();
+    call(&["create", "backup"], &store, &desktop).unwrap();
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            for _ in 0..100 {
+                assert!(Command::new("true").status().unwrap().success());
+            }
+        });
+        for _ in 0..500 {
+            call(&["configure", "backup", "--mode", "on-demand"], &store, &desktop).unwrap();
+            let p: Value = serde_json::from_str(&call(&["backup", "show"], &store, &desktop).unwrap()).unwrap();
+            assert_eq!(p["mode"], "on-demand");
+            assert_eq!(p["windows"].as_array().unwrap().len(), 2);
+        }
+    });
 }
 fn call(args: &[&str], store: &Store, desktop: &Desktop) -> Result<String> {
     run(
