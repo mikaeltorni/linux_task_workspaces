@@ -88,7 +88,9 @@ fn workspace_limit() {
 #[test]
 fn lock_release_during_process_launches() {
     let temp = tempfile::tempdir().unwrap();
-    let store = Store { root: temp.path().join("profiles") };
+    let store = Store {
+        root: temp.path().join("profiles"),
+    };
     let desktop = Desktop::new();
     call(&["create", "backup"], &store, &desktop).unwrap();
     std::thread::scope(|scope| {
@@ -98,8 +100,15 @@ fn lock_release_during_process_launches() {
             }
         });
         for _ in 0..500 {
-            call(&["configure", "backup", "--mode", "on-demand"], &store, &desktop).unwrap();
-            let p: Value = serde_json::from_str(&call(&["backup", "show"], &store, &desktop).unwrap()).unwrap();
+            call(
+                &["configure", "backup", "--mode", "on-demand"],
+                &store,
+                &desktop,
+            )
+            .unwrap();
+            let p: Value =
+                serde_json::from_str(&call(&["backup", "show"], &store, &desktop).unwrap())
+                    .unwrap();
             assert_eq!(p["mode"], "on-demand");
             assert_eq!(p["windows"].as_array().unwrap().len(), 2);
         }
@@ -201,8 +210,19 @@ fn installed_entrypoint() {
 
 #[test]
 fn tmux_contract() {
+    struct TestServer(std::path::PathBuf);
+    impl Drop for TestServer {
+        fn drop(&mut self) {
+            let _ = Command::new("tmux")
+                .arg("-S")
+                .arg(&self.0)
+                .arg("kill-server")
+                .output();
+        }
+    }
     let temp = tempfile::tempdir().unwrap();
     let socket = temp.path().join("tmux");
+    let _server = TestServer(socket.clone());
     let s = socket.to_str().unwrap();
     let cmd = |args: &[&str]| {
         let p = Command::new("tmux")
@@ -231,6 +251,18 @@ fn tmux_contract() {
         "-c",
         temp.path().to_str().unwrap(),
     ]);
+    // Session structure includes gaps in window numbering and the active window.
+    cmd(&["move-window", "-s", "backup:0", "-t", "backup:3"]);
+    cmd(&[
+        "new-window",
+        "-d",
+        "-t",
+        "backup:7",
+        "-n",
+        "upload",
+        "-c",
+        temp.path().to_str().unwrap(),
+    ]);
     let snapshot = linux_task_workspaces::tmux::snapshot(s, "backup").unwrap();
     assert_eq!(snapshot["windows"][0]["panes"].as_array().unwrap().len(), 2);
     assert_eq!(
@@ -248,6 +280,10 @@ fn tmux_contract() {
     let restored = linux_task_workspaces::tmux::snapshot(s, "backup").unwrap();
     assert_eq!(restored["windows"][0]["panes"].as_array().unwrap().len(), 2);
     assert_eq!(restored["windows"][0]["name"], "zip");
+    assert_eq!(restored["windows"][0]["index"], 3);
+    assert_eq!(restored["windows"][1]["index"], 7);
+    assert_eq!(restored["windows"][1]["name"], "upload");
+    assert_eq!(restored["windows"][0]["active"], true);
     cmd(&["kill-server"]); // only this isolated test socket
 }
 
