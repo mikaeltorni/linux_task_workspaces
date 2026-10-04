@@ -1,3 +1,4 @@
+pub mod hotkeys;
 pub mod tmux;
 
 use serde_json::{json, Value};
@@ -13,6 +14,9 @@ pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 pub trait Bridge {
     fn snapshot(&self) -> Result<Value>;
     fn action(&self, action: Value) -> Result<Value>;
+    fn bind(&self, id: &str, role: &str, chord: &str, command: &[String]) -> Result<()> {
+        hotkeys::bind(id, role, chord, command)
+    }
 }
 
 pub struct Desktop;
@@ -270,7 +274,39 @@ pub fn restore_windows(
 pub fn run(args: &[String], store: &Store, bridge: &dyn Bridge) -> Result<String> {
     let a: Vec<&str> = args.iter().map(String::as_str).collect();
     match a.as_slice() {
-        [] | ["--help"] | ["-h"] => Ok("tws create ID | list | ID show\nRemember named GNOME task workspaces and tmux sessions.\n".into()),
+        [] | ["--help"] | ["-h"] => Ok("tws create ID | list | ID show\ntws configure [ID] [--open Super+B]\ntws configure --launcher Control+Alt+Super+W\nRemember named GNOME task workspaces and tmux sessions.\n".into()),
+        ["configure", "--launcher", chord] => {
+            let normalized = hotkeys::accelerator(chord)?;
+            let command = hotkeys::terminal(&[hotkeys::executable().to_string_lossy().into_owned(),"configure".into()]);
+            bridge.bind("configuration", "launcher", &normalized, &command)?;
+            Ok(format!("Configuration shortcut: {normalized}\n"))
+        },
+        ["configure"] => {
+            let id = hotkeys::prompt("Workspace ID", "")?;
+            run(&["configure".into(),id], store, bridge)
+        },
+        ["configure", id] => {
+            let current = if store.path(id)?.exists() { store.read(id)? } else {
+                run(&["create".into(),(*id).into()],store,bridge)?;
+                store.read(id)?
+            };
+            let chord = hotkeys::prompt("Open hotkey (Super+B; - clears)",text(&current,"open_hotkey"))?;
+            run(&["configure".into(),(*id).into(),"--open".into(),chord],store,bridge)
+        },
+        ["configure", id, "--open", chord] => {
+            let mut profile = store.read(id)?;
+            let normalized = hotkeys::accelerator(chord)?;
+            bridge.bind(id,"open",&normalized,&[hotkeys::executable().to_string_lossy().into_owned(),"_activate".into(),(*id).into()])?;
+            profile["open_hotkey"] = json!(normalized);
+            store.write(id,&profile)?;
+            Ok(format!("Configured {id}: {normalized}\n"))
+        },
+        ["_activate", id] => {
+            let mut profile = store.read(id)?;
+            let ids = restore_windows(&mut profile,bridge,true)?;
+            store.write(id,&profile)?;
+            Ok(format!("Opened {id}: {} windows\n",ids.len()))
+        },
         ["list"] => Ok(store.list()?.iter().map(|p| format!("{}\tworkspace {}\t{} windows\n",
             text(p,"id"), p["workspace"].as_i64().unwrap_or(0)+1, p["windows"].as_array().map_or(0, Vec::len))).collect()),
         ["create", id] => {

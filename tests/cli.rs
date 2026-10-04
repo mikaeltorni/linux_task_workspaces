@@ -3,6 +3,8 @@
 // duplicate/invalid ID and malformed dispatch preserve saved state -> rejections;
 // installed binary executes with isolated home -> installed_entrypoint;
 // actual tmux session/window/pane/cwd snapshot, restore and live-job reuse -> tmux_contract.
+// Configuration hotkeys and two-window restoration -> hotkey_configuration;
+// malformed/ordinary key input leaves profile unchanged -> hotkey_configuration.
 use linux_task_workspaces::{run, Bridge, Result, Store};
 use serde_json::{json, Value};
 use std::cell::RefCell;
@@ -19,6 +21,12 @@ impl Desktop {
     }
 }
 impl Bridge for Desktop {
+    fn bind(&self, id: &str, role: &str, chord: &str, command: &[String]) -> Result<()> {
+        self.actions
+            .borrow_mut()
+            .push(json!({"binding":chord,"id":id,"role":role,"command":command}));
+        Ok(())
+    }
     fn snapshot(&self) -> Result<Value> {
         Ok(json!({"active":2,"count":8,
         "monitors":[{"index":0,"connector":"DP-1","x":0,"y":-1080,"width":1920,"height":1080}],
@@ -174,4 +182,50 @@ fn tmux_contract() {
     assert_eq!(restored["windows"][0]["panes"].as_array().unwrap().len(), 2);
     assert_eq!(restored["windows"][0]["name"], "zip");
     cmd(&["kill-server"]); // only this isolated test socket
+}
+
+#[test]
+fn hotkey_configuration() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = Store {
+        root: temp.path().join("profiles"),
+    };
+    let desktop = Desktop::new();
+    call(&["create", "backup"], &store, &desktop).unwrap();
+    call(
+        &["configure", "backup", "--open", "Super+B"],
+        &store,
+        &desktop,
+    )
+    .unwrap();
+    let expected = call(&["backup", "show"], &store, &desktop).unwrap();
+    for args in [
+        vec!["configure", "backup", "--open", "b"],
+        vec!["configure", "backup", "--open", "Ctrl+Super"],
+        vec!["configure", "backup", "--open", "Super+A+B"],
+        vec!["configure", "backup", "extra"],
+    ] {
+        assert!(call(&args, &store, &desktop).is_err());
+        assert_eq!(
+            call(&["backup", "show"], &store, &desktop).unwrap(),
+            expected
+        );
+    }
+    call(
+        &["configure", "--launcher", "Alt+Control+Super+W"],
+        &store,
+        &desktop,
+    )
+    .unwrap();
+    call(&["_activate", "backup"], &store, &desktop).unwrap();
+    assert_eq!(
+        desktop
+            .actions
+            .borrow()
+            .iter()
+            .filter(|a| a["op"] == "place")
+            .count(),
+        2
+    );
+    assert_eq!(desktop.actions.borrow().last().unwrap()["op"], "focus");
 }
