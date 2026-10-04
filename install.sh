@@ -18,6 +18,10 @@ for candidate in "${ISC_FUNCTIONS_DIR:-}" "$SCRIPT_DIR/../linux_installation_scr
     fi
 done
 if ! declare -F isc_load_helpers >/dev/null; then
+    if [[ ${TWS_INSTALL_OFFLINE:-0} == 1 ]]; then
+        printf 'Offline installation needs a sibling linux_installation_scripts_functions checkout or ISC_FUNCTIONS_DIR.\n' >&2
+        exit 1
+    fi
     loader=$(mktemp)
     trap 'rm -f "$loader"' EXIT
     curl -fsSL "https://raw.githubusercontent.com/mikaeltorni/linux_installation_scripts_functions/${ISC_FUNCTIONS_REF:-master}/component_loader.sh" -o "$loader"

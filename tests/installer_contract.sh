@@ -62,3 +62,8 @@ before=$(wc -l < "$TWS_TEST_CALLS")
 TWS_INSTALL_OFFLINE=1 TWS_BINARY="$1" bash "$fixture/repo/install.sh"
 tail -n +$((before + 1)) "$TWS_TEST_CALLS" > "$fixture/offline"
 ! rg 'curl|rustup|systemctl|gsettings|gnome-extensions' "$fixture/offline"
+before=$(wc -l < "$TWS_TEST_CALLS")
+if HOME="$fixture/home" ISC_FUNCTIONS_DIR="$fixture/missing" TWS_INSTALL_OFFLINE=1 \
+    TWS_BINARY="$1" bash "$fixture/repo/install.sh"; then exit 1; fi
+[[ $(wc -l < "$TWS_TEST_CALLS") == "$before" ]]
+cmp "$1" "$fixture/home/.local/bin/tws"
