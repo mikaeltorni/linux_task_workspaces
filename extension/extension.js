@@ -74,10 +74,35 @@ export default class TaskWorkspaces extends Extension {
     Action(raw) {
         try {
             const a = JSON.parse(raw);
+            if (a.op === 'ensure') {
+                if (!Number.isInteger(a.workspace) || a.workspace < 0 || a.workspace > 127)
+                    throw new Error('Workspace index must be 0–127');
+                const count = Math.max(global.workspace_manager.n_workspaces, a.workspace + 1);
+                const mutter = new Gio.Settings({schema_id: 'org.gnome.mutter'});
+                const preferences = new Gio.Settings({schema_id: 'org.gnome.desktop.wm.preferences'});
+                mutter.set_boolean('dynamic-workspaces', false);
+                mutter.set_boolean('workspaces-only-on-primary', false);
+                preferences.set_int('num-workspaces', count);
+                while (global.workspace_manager.n_workspaces < count)
+                    global.workspace_manager.append_new_workspace(false, global.get_current_time());
+                const names = preferences.get_strv('workspace-names');
+                while (names.length < count)
+                    names.push('');
+                names[a.workspace] = a.name;
+                preferences.set_strv('workspace-names', names);
+                return JSON.stringify({ok: true, workspace: a.workspace});
+            }
             const ws = global.workspace_manager.get_workspace_by_index(a.workspace);
             if (!ws)
                 throw new Error('Workspace does not exist');
-            if (a.op === 'focus') {
+            if (a.op === 'hide' || a.op === 'close') {
+                for (const w of this.windows().filter(w => a.ids.includes(String(w.get_stable_sequence())))) {
+                    if (a.op === 'hide')
+                        w.minimize();
+                    else
+                        w.delete(global.get_current_time());
+                }
+            } else if (a.op === 'focus') {
                 ws.activate(global.get_current_time());
             } else if (a.op === 'place') {
                 const w = this.windows().find(w => String(w.get_stable_sequence()) === a.id);

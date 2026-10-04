@@ -5,6 +5,8 @@
 // actual tmux session/window/pane/cwd snapshot, restore and live-job reuse -> tmux_contract.
 // Configuration hotkeys and two-window restoration -> hotkey_configuration;
 // malformed/ordinary key input leaves profile unchanged -> hotkey_configuration.
+// Permanent extra slot, mode/close shortcuts, hide ownership, startup restoration
+// without focus and invalid mode/shape preserve profile -> permanent_modes.
 use linux_task_workspaces::{run, Bridge, Result, Store};
 use serde_json::{json, Value};
 use std::cell::RefCell;
@@ -56,7 +58,7 @@ fn snapshot_contract() {
     call(&["create", "backups"], &store, &desktop).unwrap();
     let p: Value =
         serde_json::from_str(&call(&["backups", "show"], &store, &desktop).unwrap()).unwrap();
-    assert_eq!(p["workspace"], 2);
+    assert_eq!(p["workspace"], 8);
     assert_eq!(p["windows"][0]["rect"], json!([0, -1080, 960, 1080]));
     assert_eq!(p["windows"][1]["rect"], json!([960, -1080, 960, 1080]));
     assert!(call(&["list"], &store, &desktop)
@@ -228,4 +230,69 @@ fn hotkey_configuration() {
         2
     );
     assert_eq!(desktop.actions.borrow().last().unwrap()["op"], "focus");
+}
+
+#[test]
+fn permanent_modes() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = Store {
+        root: temp.path().join("profiles"),
+    };
+    let desktop = Desktop::new();
+    call(&["create", "backup"], &store, &desktop).unwrap();
+    call(&["create", "second"], &store, &desktop).unwrap();
+    assert_eq!(store.read("backup").unwrap()["workspace"], 8);
+    assert_eq!(store.read("second").unwrap()["workspace"], 9);
+    call(
+        &["configure", "backup", "--mode", "always"],
+        &store,
+        &desktop,
+    )
+    .unwrap();
+    call(
+        &["configure", "backup", "--close", "Ctrl+Super+B"],
+        &store,
+        &desktop,
+    )
+    .unwrap();
+    call(
+        &["configure", "backup", "--close-action", "hide"],
+        &store,
+        &desktop,
+    )
+    .unwrap();
+    let expected = call(&["backup", "show"], &store, &desktop).unwrap();
+    for args in [
+        vec!["configure", "backup", "--mode", "wrong"],
+        vec!["configure", "backup", "--close-action", "wrong"],
+        vec!["backup", "hide", "extra"],
+        vec!["backup", "close", "extra"],
+        vec!["_startup", "extra"],
+    ] {
+        assert!(call(&args, &store, &desktop).is_err());
+        assert_eq!(
+            call(&["backup", "show"], &store, &desktop).unwrap(),
+            expected
+        );
+    }
+    desktop.actions.borrow_mut().clear();
+    call(&["_startup"], &store, &desktop).unwrap();
+    assert_eq!(
+        desktop
+            .actions
+            .borrow()
+            .iter()
+            .filter(|a| a["op"] == "place")
+            .count(),
+        2
+    );
+    assert!(!desktop.actions.borrow().iter().any(|a| a["op"] == "focus"));
+    call(&["backup", "hide"], &store, &desktop).unwrap();
+    assert_eq!(
+        desktop.actions.borrow().last().unwrap()["ids"],
+        json!(["42", "43"])
+    );
+    desktop.actions.borrow_mut().clear();
+    call(&["_startup"], &store, &desktop).unwrap();
+    assert!(!desktop.actions.borrow().iter().any(|a| a["op"] == "place"));
 }

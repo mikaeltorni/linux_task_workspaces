@@ -47,6 +47,22 @@ extension="$TARGET_HOME/.local/share/gnome-shell/extensions/task-workspaces@loca
 run_as_target mkdir -p "$extension" "$TARGET_HOME/.local/bin"
 run_as_target cp "$SCRIPT_DIR/extension/extension.js" "$SCRIPT_DIR/extension/geometry.js" "$SCRIPT_DIR/extension/metadata.json" "$extension/"
 run_as_target install -m 755 "$binary" "$TARGET_HOME/.local/bin/tws"
+run_as_target mkdir -p "$TARGET_HOME/.config/systemd/user"
+unit=$(mktemp)
+trap 'rm -f "$unit"' EXIT
+cat > "$unit" <<UNIT
+[Unit]
+Description=Keep named task workspaces and always-on windows available
+After=graphical-session.target
+PartOf=graphical-session.target
+[Service]
+ExecStart="$TARGET_HOME/.local/bin/tws" _watch
+Restart=on-failure
+RestartSec=10
+[Install]
+WantedBy=graphical-session.target
+UNIT
+run_as_target install -m 644 "$unit" "$TARGET_HOME/.config/systemd/user/task-workspaces.service"
 if [[ ${TWS_INSTALL_OFFLINE:-0} != 1 ]]; then
     if ! run_as_target gnome-extensions enable task-workspaces@local; then
         current=$(run_as_target gsettings get org.gnome.shell enabled-extensions)
@@ -61,6 +77,9 @@ if [[ ${TWS_INSTALL_OFFLINE:-0} != 1 ]]; then
         printf 'Extension registered for next login; GNOME will discover it after logout/login on Wayland.\n'
     fi
     run_as_target gsettings get org.gnome.shell enabled-extensions
+    run_as_target systemctl --user daemon-reload
+    run_as_target systemctl --user enable task-workspaces.service
+    run_as_target systemctl --user restart task-workspaces.service
 fi
 printf 'Installed %s/.local/bin/tws\n' "$TARGET_HOME"
 if ((${#SUDO_REQUIRED_STEPS[@]})); then

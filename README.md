@@ -27,12 +27,28 @@ tws --help
 tws configure backups   # terminal wizard; creates a snapshot if needed
 tws configure backups --open Super+B
 tws configure --launcher Control+Alt+Super+W
+tws configure backups --mode always     # keep windows available after login
+tws configure backups --mode on-demand  # open on its shortcut
+tws configure backups --close Ctrl+Super+B
+tws configure backups --close-action hide  # default; or close
+tws backups hide
+tws backups close
 ```
 
 `tws configure` prompts for a workspace ID. Its shortcut opens that CLI in Kitty
 (override the terminal program with `TWS_TERMINAL`). The open shortcut restores
 and focuses its saved workspace. `_activate ID` is the internal hotkey handler.
 No shortcuts are assigned until you configure them.
+
+New task slots are appended after existing workspaces and named `Task: ID`;
+creation preserves the snapshot's source workspace, reserving the new slot until
+opened. Static workspace count is retained, and workspaces span all monitors.
+The `task-workspaces.service` reconciles permanent slots and `always` windows
+every 20 seconds without focusing them. `on-demand` windows open only when
+requested. Hide minimizes just saved windows and preserves running tmux jobs;
+close asks those application windows to close, keeping detached tmux jobs alive.
+Either suspends automatic reopening until the next open action. `_dismiss ID`,
+`_startup`, and `_watch` are internal shortcut/service entrypoints.
 
 Snapshots live in `${XDG_CONFIG_HOME:-~/.config}/task-workspaces/ID.json` with
 private permissions; `TWS_CONFIG_HOME` overrides that directory. Window frames
