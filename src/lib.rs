@@ -1,3 +1,4 @@
+pub mod chrome;
 pub mod config;
 pub mod folders;
 pub mod hotkeys;
@@ -51,6 +52,7 @@ impl Bridge for Desktop {
     fn snapshot(&self) -> Result<Value> {
         let mut snapshot = self.call("Snapshot", None)?;
         snapshot["folder_locations"] = folders::nautilus_locations().unwrap_or_else(|_| json!({}));
+        snapshot["chrome_sessions"] = json!(chrome::discover(&snapshot));
         Ok(snapshot)
     }
     fn action(&self, action: Value) -> Result<Value> {
@@ -368,10 +370,28 @@ pub fn run(args: &[String], store: &Store, bridge: &dyn Bridge) -> Result<String
             let windows=p["windows"].as_array_mut().ok_or("Invalid windows")?;
             let w=windows.get_mut(index).ok_or("Window index out of range; inspect ID show (zero-based)")?;
             w["launch"]=serde_json::from_str(argv)?;
+            w["manual_launch"]=json!(true);
             if command_argv(w)?.is_empty() {return Err("Launch command cannot be empty".into());}
             config::validate(&p,id)?;
             store.write(id,&p)?;
             Ok(format!("Updated window {index} launch for {id}\n"))
+        },
+        [id,"save"] => {
+            let mut profile=store.read(id)?;
+            let snapshot=bridge.snapshot()?;
+            let slot=profile["workspace"].as_i64().ok_or("Invalid workspace slot")?;
+            let mut captured=capture(&snapshot,slot)?;
+            let sessions=snapshot["chrome_sessions"].as_array().cloned().unwrap_or_default();
+            let mut used=std::collections::BTreeSet::new();
+            for w in captured["windows"].as_array_mut().unwrap() {
+                let old=profile["windows"].as_array().and_then(|a|a.iter().find(|old|old["id"]==w["id"]&&old["pid"]==w["pid"]&&old["class"]==w["class"]));
+                if let Some(old)=old.filter(|p|p["manual_launch"]==true) {
+                    w["launch"]=old["launch"].clone();w["manual_launch"]=json!(true);
+                } else {chrome::attach(w,&sessions,&mut used)?;}
+            }
+            profile["windows"]=captured["windows"].clone();profile["monitors"]=captured["monitors"].clone();
+            store.write(id,&profile)?;
+            Ok(format!("Saved {id}: {} windows\n",profile["windows"].as_array().unwrap().len()))
         },
         ["list"] => Ok(store.list()?.iter().map(|p| format!("{}\tworkspace {}\t{} windows\n",
             text(p,"id"), p["workspace"].as_i64().unwrap_or(0)+1, p["windows"].as_array().map_or(0, Vec::len))).collect()),
