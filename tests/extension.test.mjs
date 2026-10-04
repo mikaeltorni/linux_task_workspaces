@@ -15,6 +15,7 @@ function fixture() {
         get_stable_sequence: () => 42, get_pid: () => 100, get_workspace: () => ({index: () => 2}),
         get_window_type: () => 0, is_skip_taskbar: () => false, is_on_all_workspaces: () => false,
         get_wm_class: () => 'kitty', get_title: () => 'Backup', get_monitor: () => 0,
+        get_gtk_window_object_path: () => '',
         get_frame_rect: () => ({x: 0, y: -1080, width: 960, height: 1080}),
         get_maximized: () => 0, is_fullscreen: () => false,
     };

@@ -12,6 +12,8 @@
 // profile import and invalid shape/slot leave saved profile intact -> edit_contract.
 // Real GSettings registration/readback, own path exclusion and collision
 // unchanged-state -> gsettings_contract (isolated shell runner).
+// Per-window file-manager folder capture and explicit argv including spaces ->
+// folder_contract; invalid argv/index preserves profile -> folder_contract.
 use linux_task_workspaces::{run, Bridge, Result, Store};
 use serde_json::{json, Value};
 use std::cell::RefCell;
@@ -423,4 +425,78 @@ fn gsettings_contract() {
         String::from_utf8_lossy(&p.stdout),
         String::from_utf8_lossy(&p.stderr)
     );
+}
+
+#[test]
+fn folder_contract() {
+    struct Files;
+    impl Bridge for Files {
+        fn snapshot(&self) -> Result<Value> {
+            let mut s = Desktop::new().snapshot()?;
+            s["windows"][0]["class"] = json!("org.gnome.Nautilus");
+            s["windows"][0]["gtk_path"] = json!("/org/gnome/Nautilus/window/1");
+            s["folder_locations"] =
+                json!({"/org/gnome/Nautilus/window/1":["file:///home/test/Drive%20Backups"]});
+            Ok(s)
+        }
+        fn action(&self, _: Value) -> Result<Value> {
+            Ok(json!({"ok":true}))
+        }
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let store = Store {
+        root: temp.path().join("profiles"),
+    };
+    run(&["create".into(), "files".into()], &store, &Files).unwrap();
+    let p: Value =
+        serde_json::from_str(&run(&["files".into(), "show".into()], &store, &Files).unwrap())
+            .unwrap();
+    assert_eq!(
+        p["windows"][0]["folders"],
+        json!(["file:///home/test/Drive%20Backups"])
+    );
+    assert_eq!(
+        p["windows"][0]["launch"],
+        json!([
+            "nautilus",
+            "--new-window",
+            "file:///home/test/Drive%20Backups"
+        ])
+    );
+    let desktop = Desktop::new();
+    call(
+        &[
+            "configure",
+            "files",
+            "--launch",
+            "0",
+            r#"["nautilus","--new-window","/home/test/My Backups"]"#,
+        ],
+        &store,
+        &desktop,
+    )
+    .unwrap();
+    assert_eq!(
+        store.read("files").unwrap()["windows"][0]["launch"][2],
+        "/home/test/My Backups"
+    );
+    let expected = call(&["files", "show"], &store, &desktop).unwrap();
+    for (index, argv) in [
+        ("999", "[]"),
+        ("0", "[42]"),
+        ("0", "[]"),
+        ("0", "{}"),
+        ("bad", "[]"),
+    ] {
+        assert!(call(
+            &["configure", "files", "--launch", index, argv],
+            &store,
+            &desktop
+        )
+        .is_err());
+        assert_eq!(
+            call(&["files", "show"], &store, &desktop).unwrap(),
+            expected
+        );
+    }
 }

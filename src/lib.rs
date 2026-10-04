@@ -1,4 +1,5 @@
 pub mod config;
+pub mod folders;
 pub mod hotkeys;
 pub mod tmux;
 
@@ -48,7 +49,9 @@ impl Desktop {
 
 impl Bridge for Desktop {
     fn snapshot(&self) -> Result<Value> {
-        self.call("Snapshot", None)
+        let mut snapshot = self.call("Snapshot", None)?;
+        snapshot["folder_locations"] = folders::nautilus_locations().unwrap_or_else(|_| json!({}));
+        Ok(snapshot)
     }
     fn action(&self, action: Value) -> Result<Value> {
         self.call("Action", Some(action))
@@ -160,6 +163,7 @@ pub fn capture(snapshot: &Value, workspace: i64) -> Result<Value> {
         } else {
             json!([])
         };
+        folders::attach(&mut w, &snapshot["folder_locations"]);
         windows.push(w);
     }
     Ok(json!({"windows": windows, "monitors": snapshot["monitors"]}))
@@ -357,6 +361,17 @@ pub fn run(args: &[String], store: &Store, bridge: &dyn Bridge) -> Result<String
         ["conflicts", chord] => {
             let hits = bridge.conflicts(&hotkeys::accelerator(chord)?,"","")?;
             Ok(if hits.is_empty() { "Free in GNOME settings\n".into() } else { format!("{}\n",hits.join("\n")) })
+        },
+        ["configure",id,"--launch",window,argv] => {
+            let mut p=store.read(id)?;
+            let index=window.parse::<usize>()?;
+            let windows=p["windows"].as_array_mut().ok_or("Invalid windows")?;
+            let w=windows.get_mut(index).ok_or("Window index out of range; inspect ID show (zero-based)")?;
+            w["launch"]=serde_json::from_str(argv)?;
+            if command_argv(w)?.is_empty() {return Err("Launch command cannot be empty".into());}
+            config::validate(&p,id)?;
+            store.write(id,&p)?;
+            Ok(format!("Updated window {index} launch for {id}\n"))
         },
         ["list"] => Ok(store.list()?.iter().map(|p| format!("{}\tworkspace {}\t{} windows\n",
             text(p,"id"), p["workspace"].as_i64().unwrap_or(0)+1, p["windows"].as_array().map_or(0, Vec::len))).collect()),

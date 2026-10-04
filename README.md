@@ -38,6 +38,7 @@ tws edit backups            # CLI wizard; tws backups edit also works
 tws backups edit --json     # $TWS_EDITOR / $EDITOR / nano
 tws backups edit --file /path/to/profile.json
 TWS_EDIT_ID=backups tws
+tws configure backups --launch 0 '["nautilus","--new-window","/home/mk/My Backups"]'
 ```
 
 `tws configure` prompts for a workspace ID. Its shortcut opens that CLI in Kitty
@@ -69,7 +70,15 @@ are saved relative to named monitor connectors and scaled if resolution changes.
 Disconnected monitors fall back to a visible monitor. Sticky windows are excluded.
 Tmux clients are linked to their terminal process; saved sessions record their
 socket, names, windows, panes, directories and layout. Running processes are not
-replayed after reboot. Browser URLs and file-manager paths are not yet captured.
+replayed after reboot. Browser URLs are not yet captured.
+
+Nautilus folders are captured through its `OpenWindowsWithLocations` D-Bus
+property and matched to GNOME's GTK window object path, preserving each window's
+URI list (including remote folders). Reopening uses `nautilus --new-window`;
+Nautilus may open saved tab locations in separate windows. Other file managers
+can use `--launch INDEX JSON_ARGV` (zero-based snapshot window index) or a JSON
+edit to set their launch command and folder. Launch arrays preserve spaces and
+never pass through a shell; use `["bash","-lc","..."]` only if you want a shell.
 
 The GNOME bridge must be active: on Wayland a newly installed extension is
 discovered after manual logout/login; on X11 use GNOME's run-dialog reload.
