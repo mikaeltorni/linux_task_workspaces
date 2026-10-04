@@ -2,6 +2,8 @@
 # Run: bash tests/gsettings_contract.sh "$PWD/target/debug/tws"
 # Public-interface coverage: launcher registration/readback; own-path rebinding;
 # conflict preserves the existing chord and custom path list; clear unregisters.
+# Installer bootstrap assigns a free launcher chord, retains user rebinding on
+# reinstall, and preserves settings if the default chord belongs to GNOME.
 # Private D-Bus and temporary HOME prevent changes to the real desktop.
 set -euo pipefail
 if [[ ${TWS_TEST_BUS:-0} != 1 ]]; then
@@ -24,3 +26,30 @@ if "$bin" configure --launcher Super+W; then exit 1; fi
 [[ $(gsettings get "$media" custom-keybindings) == "$expected" ]]
 "$bin" configure --launcher ''
 [[ $(gsettings get "$media" custom-keybindings) == '@as []' || $(gsettings get "$media" custom-keybindings) == '[]' ]]
+fixture=$(mktemp -d)
+trap 'rm -rf "$fixture"' EXIT
+mkdir -p "$fixture/bin" "$fixture/framework"
+for name in systemctl gnome-extensions; do
+    printf '#!/bin/bash\nexit 0\n' > "$fixture/bin/$name"
+    chmod +x "$fixture/bin/$name"
+done
+cat > "$fixture/framework/component_loader.sh" <<'HELPERS'
+isc_load_helpers() {
+    run_as_target() { "$@"; }
+    is_root() { return 1; }
+}
+HELPERS
+export ISC_FUNCTIONS_DIR="$fixture/framework" TWS_INSTALL_HOME="$HOME" TWS_BINARY="$bin"
+export PATH="$fixture/bin:$PATH"
+root=$(cd "$(dirname "$0")/.." && pwd)
+bash "$root/install.sh"
+[[ $(gsettings get "$schema" binding) == "'<Alt><Control><Super>w'" ]]
+"$HOME/.local/bin/tws" configure --launcher Control+Alt+Super+F12
+bash "$root/install.sh"
+[[ $(gsettings get "$schema" binding) == "'<Alt><Control><Super>F12'" ]]
+"$HOME/.local/bin/tws" configure --launcher ''
+gsettings set org.gnome.desktop.wm.keybindings switch-to-workspace-6 "['<Alt><Control><Super>w']"
+before=$(gsettings get "$media" custom-keybindings)
+bash "$root/install.sh"
+[[ $(gsettings get "$media" custom-keybindings) == "$before" ]]
+[[ $(gsettings get org.gnome.desktop.wm.keybindings switch-to-workspace-6) == "['<Alt><Control><Super>w']" ]]

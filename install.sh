@@ -95,6 +95,15 @@ if [[ ${TWS_INSTALL_OFFLINE:-0} != 1 ]]; then
         printf 'Extension registered for next login; GNOME will discover it after logout/login on Wayland.\n'
     fi
     run_as_target gsettings get org.gnome.shell enabled-extensions
+    launcher_schema='org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/tws-configuration-launcher/'
+    current_launcher=$(run_as_target gsettings get "$launcher_schema" binding)
+    if [[ ${TWS_CONFIG_HOTKEY:-} != none ]] &&
+       { [[ -n ${TWS_CONFIG_HOTKEY:-} ]] || [[ "$current_launcher" == "''" ]]; }; then
+        launcher_hotkey=${TWS_CONFIG_HOTKEY:-Control+Alt+Super+W}
+        if ! run_as_target "$TARGET_HOME/.local/bin/$command_name" configure --launcher "$launcher_hotkey"; then
+            printf 'Configuration shortcut unavailable; choose one with: tws configure --launcher HOTKEY\n'
+        fi
+    fi
     run_as_target systemctl --user daemon-reload
     run_as_target systemctl --user enable task-workspaces.service
     run_as_target systemctl --user restart task-workspaces.service
