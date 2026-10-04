@@ -274,7 +274,7 @@ pub fn restore_windows(
 pub fn run(args: &[String], store: &Store, bridge: &dyn Bridge) -> Result<String> {
     let a: Vec<&str> = args.iter().map(String::as_str).collect();
     match a.as_slice() {
-        [] | ["--help"] | ["-h"] => Ok("tws create ID | list | ID show\ntws configure [ID] [--open Super+B]\ntws configure --launcher Control+Alt+Super+W\nRemember named GNOME task workspaces and tmux sessions.\n".into()),
+        [] | ["--help"] | ["-h"] => Ok("tws create ID | list | ID show | ID hide | ID close\ntws configure [ID] [--open Super+B | --close Ctrl+Super+B | --mode always|on-demand | --close-action hide|close]\ntws configure --launcher Control+Alt+Super+W\nRemember named GNOME task workspaces and tmux sessions.\n".into()),
         ["configure", "--launcher", chord] => {
             let normalized = hotkeys::accelerator(chord)?;
             let command = hotkeys::terminal(&[hotkeys::executable().to_string_lossy().into_owned(),"configure".into()]);
@@ -291,7 +291,11 @@ pub fn run(args: &[String], store: &Store, bridge: &dyn Bridge) -> Result<String
                 store.read(id)?
             };
             let chord = hotkeys::prompt("Open hotkey (Super+B; - clears)",text(&current,"open_hotkey"))?;
-            run(&["configure".into(),(*id).into(),"--open".into(),chord],store,bridge)
+            run(&["configure".into(),(*id).into(),"--open".into(),chord],store,bridge)?;
+            let mode = hotkeys::prompt("Mode (always / on-demand)",text(&current,"mode"))?;
+            run(&["configure".into(),(*id).into(),"--mode".into(),mode],store,bridge)?;
+            let close = hotkeys::prompt("Hide/close hotkey (Ctrl+Super+B; - clears)",text(&current,"close_hotkey"))?;
+            run(&["configure".into(),(*id).into(),"--close".into(),close],store,bridge)
         },
         ["configure", id, "--open", chord] => {
             let mut profile = store.read(id)?;
@@ -303,9 +307,42 @@ pub fn run(args: &[String], store: &Store, bridge: &dyn Bridge) -> Result<String
         },
         ["_activate", id] => {
             let mut profile = store.read(id)?;
+            ensure(&profile,bridge)?;
             let ids = restore_windows(&mut profile,bridge,true)?;
+            profile["hidden"] = json!(false);
             store.write(id,&profile)?;
             Ok(format!("Opened {id}: {} windows\n",ids.len()))
+        },
+        ["configure", id, "--mode", mode] => {
+            if !["always","on-demand"].contains(mode) { return Err("Mode must be always or on-demand".into()); }
+            let mut p = store.read(id)?; p["mode"] = json!(mode); store.write(id,&p)?;
+            Ok(format!("{id}: {mode}\n"))
+        },
+        ["configure", id, "--close-action", action] => {
+            if !["hide","close"].contains(action) { return Err("Close action must be hide or close".into()); }
+            let mut p = store.read(id)?; p["close_action"] = json!(action); store.write(id,&p)?;
+            Ok(format!("{id}: {action}\n"))
+        },
+        ["configure", id, "--close", chord] => {
+            let mut p = store.read(id)?; let chord = hotkeys::accelerator(chord)?;
+            bridge.bind(id,"close",&chord,&[hotkeys::executable().to_string_lossy().into_owned(),"_dismiss".into(),(*id).into()])?;
+            p["close_hotkey"] = json!(chord); store.write(id,&p)?;
+            Ok(format!("Hide/close shortcut for {id}: {chord}\n"))
+        },
+        [id, "hide"] | [id, "close"] | ["_dismiss", id] => {
+            let mut p = store.read(id)?;
+            let op = if a[0] == "_dismiss" { text(&p,"close_action") } else { a[1] }.to_string();
+            let snapshot = bridge.snapshot()?;
+            let ids: Vec<Value> = snapshot["windows"].as_array().ok_or("Invalid snapshot")?.iter()
+                .filter(|w| p["windows"].as_array().is_some_and(|windows| windows.iter().any(|saved|
+                    saved["id"] == w["id"] && saved["pid"] == w["pid"] && saved["class"] == w["class"])))
+                .map(|w| w["id"].clone()).collect();
+            bridge.action(json!({"op":op,"workspace":p["workspace"],"ids":ids}))?;
+            p["hidden"] = json!(true); store.write(id,&p)?;
+            Ok(format!("{id}: {op} (tmux sessions preserved)\n"))
+        },
+        ["_startup"] => {
+            reconcile(store,bridge)?; Ok("Task workspaces reconciled\n".into())
         },
         ["list"] => Ok(store.list()?.iter().map(|p| format!("{}\tworkspace {}\t{} windows\n",
             text(p,"id"), p["workspace"].as_i64().unwrap_or(0)+1, p["windows"].as_array().map_or(0, Vec::len))).collect()),
@@ -314,13 +351,34 @@ pub fn run(args: &[String], store: &Store, bridge: &dyn Bridge) -> Result<String
             let snapshot = bridge.snapshot()?;
             let workspace = snapshot["active"].as_i64().ok_or("No active workspace")?;
             let mut profile = capture(&snapshot, workspace)?;
-            profile["version"] = json!(1); profile["id"] = json!(id); profile["workspace"] = json!(workspace);
+            let highest = store.list()?.iter().filter_map(|p| p["workspace"].as_i64()).max().unwrap_or(-1)+1;
+            let slot = snapshot["count"].as_i64().ok_or("Invalid workspace count")?.max(highest);
+            profile["version"] = json!(1); profile["id"] = json!(id); profile["workspace"] = json!(slot);
+            profile["mode"] = json!("on-demand"); profile["close_action"] = json!("hide"); profile["hidden"] = json!(false);
+            ensure(&profile,bridge)?;
             store.write(id, &profile)?;
             Ok(format!("Remembered {id}: {} windows\n", profile["windows"].as_array().unwrap().len()))
         },
         [id, "show"] => Ok(format!("{}\n", serde_json::to_string_pretty(&store.read(id)?)?)),
         _ => Err("Expected create ID, list, or ID show; run tws --help.".into()),
     }
+}
+
+pub fn ensure(profile: &Value, bridge: &dyn Bridge) -> Result<()> {
+    bridge.action(json!({"op":"ensure","workspace":profile["workspace"],"name":format!("Task: {}",text(profile,"id"))}))?;
+    Ok(())
+}
+
+pub fn reconcile(store: &Store, bridge: &dyn Bridge) -> Result<()> {
+    for mut p in store.list()? {
+        ensure(&p, bridge)?;
+        if p["mode"] == "always" && p["hidden"] != true {
+            restore_windows(&mut p, bridge, false)?;
+            let id = text(&p, "id").to_owned();
+            store.write(&id, &p)?;
+        }
+    }
+    Ok(())
 }
 
 pub fn output(program: &str, args: &[&str]) -> Result<String> {
