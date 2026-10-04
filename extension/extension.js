@@ -64,6 +64,7 @@ export default class TaskWorkspaces extends Extension {
                 return {id: String(w.get_stable_sequence()), pid: w.get_pid(),
                     workspace: w.get_workspace().index(), sticky: w.is_on_all_workspaces(),
                     app: tracker.get_window_app(w)?.get_id() ?? '',
+                    gtk_path: w.get_gtk_window_object_path() ?? '',
                     class: w.get_wm_class() ?? '', title: w.get_title() ?? '',
                     rect: [r.x, r.y, r.width, r.height],
                     monitor: monitors[w.get_monitor()]?.connector,
