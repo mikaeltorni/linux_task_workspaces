@@ -33,12 +33,25 @@ tws configure backups --close Ctrl+Super+B
 tws configure backups --close-action hide  # default; or close
 tws backups hide
 tws backups close
+tws conflicts Super+B       # inspect existing GNOME/extension shortcuts
+tws edit backups            # CLI wizard; tws backups edit also works
+tws backups edit --json     # $TWS_EDITOR / $EDITOR / nano
+tws backups edit --file /path/to/profile.json
+TWS_EDIT_ID=backups tws
 ```
 
 `tws configure` prompts for a workspace ID. Its shortcut opens that CLI in Kitty
 (override the terminal program with `TWS_TERMINAL`). The open shortcut restores
 and focuses its saved workspace. `_activate ID` is the internal hotkey handler.
 No shortcuts are assigned until you configure them.
+
+Every assigned shortcut is normalized and checked against GNOME settings,
+registered custom shortcuts, installed GNOME extension schemas, and other saved
+task bindings. A collision is rejected with its owner; existing bindings are
+never cleared. App-local shortcuts and hardcoded third-party input grabs are
+outside GNOME's settings registry. JSON edits use a private draft and validate
+before replacing the saved profile. `TWS_COMMAND=tasks bash install.sh` installs
+an additional `tasks` command; `tws` remains available for service compatibility.
 
 New task slots are appended after existing workspaces and named `Task: ID`;
 creation preserves the snapshot's source workspace, reserving the new slot until

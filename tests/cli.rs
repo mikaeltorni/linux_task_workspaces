@@ -7,6 +7,11 @@
 // malformed/ordinary key input leaves profile unchanged -> hotkey_configuration.
 // Permanent extra slot, mode/close shortcuts, hide ownership, startup restoration
 // without focus and invalid mode/shape preserve profile -> permanent_modes.
+// GNOME conflicts, modifier/case aliases, own-binding reconfiguration, other
+// task open/close collisions and unchanged profile -> conflict_contract;
+// profile import and invalid shape/slot leave saved profile intact -> edit_contract.
+// Real GSettings registration/readback, own path exclusion and collision
+// unchanged-state -> gsettings_contract (isolated shell runner).
 use linux_task_workspaces::{run, Bridge, Result, Store};
 use serde_json::{json, Value};
 use std::cell::RefCell;
@@ -23,6 +28,13 @@ impl Desktop {
     }
 }
 impl Bridge for Desktop {
+    fn conflicts(&self, chord: &str, _id: &str, _role: &str) -> Result<Vec<String>> {
+        Ok(if chord == "<Super>w" {
+            vec!["org.gnome.desktop.wm.keybindings switch-to-workspace-6".into()]
+        } else {
+            vec![]
+        })
+    }
     fn bind(&self, id: &str, role: &str, chord: &str, command: &[String]) -> Result<()> {
         self.actions
             .borrow_mut()
@@ -295,4 +307,120 @@ fn permanent_modes() {
     desktop.actions.borrow_mut().clear();
     call(&["_startup"], &store, &desktop).unwrap();
     assert!(!desktop.actions.borrow().iter().any(|a| a["op"] == "place"));
+}
+
+#[test]
+fn conflict_contract() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = Store {
+        root: temp.path().join("profiles"),
+    };
+    let desktop = Desktop::new();
+    call(&["create", "backup"], &store, &desktop).unwrap();
+    call(
+        &["configure", "backup", "--open", "Super+B"],
+        &store,
+        &desktop,
+    )
+    .unwrap();
+    call(
+        &["configure", "backup", "--open", "<Super>b"],
+        &store,
+        &desktop,
+    )
+    .unwrap();
+    let expected = call(&["backup", "show"], &store, &desktop).unwrap();
+    for args in [
+        vec!["configure", "backup", "--open", "Super+W"],
+        vec!["configure", "backup", "--close", "Super+B"],
+    ] {
+        assert!(call(&args, &store, &desktop).is_err());
+        assert_eq!(
+            call(&["backup", "show"], &store, &desktop).unwrap(),
+            expected
+        );
+    }
+    call(&["create", "other"], &store, &desktop).unwrap();
+    let other = call(&["other", "show"], &store, &desktop).unwrap();
+    assert!(call(
+        &["configure", "other", "--open", "Super+B"],
+        &store,
+        &desktop
+    )
+    .is_err());
+    assert_eq!(call(&["other", "show"], &store, &desktop).unwrap(), other);
+    assert!(call(&["conflicts", "Super+W"], &store, &desktop)
+        .unwrap()
+        .contains("switch-to-workspace-6"));
+    use linux_task_workspaces::hotkeys::{accelerator, matches_output, schema};
+    assert_eq!(
+        accelerator("ctrl+super+shift+b").unwrap(),
+        accelerator("<Shift><Super><Primary>B").unwrap()
+    );
+    let own = schema("backup", "open");
+    assert!(matches_output("<Super>b", &format!("{own} binding '<Super>B'"), &own).is_empty());
+    assert_eq!(
+        matches_output("<Super>b", "extension hotkey ['<Super>B']", "").len(),
+        1
+    );
+}
+
+#[test]
+fn edit_contract() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = Store {
+        root: temp.path().join("profiles"),
+    };
+    let desktop = Desktop::new();
+    call(&["create", "backup"], &store, &desktop).unwrap();
+    let file = temp.path().join("edit.json");
+    let mut p = store.read("backup").unwrap();
+    p["mode"] = json!("always");
+    p["open_hotkey"] = json!("Super+B");
+    std::fs::write(&file, p.to_string()).unwrap();
+    call(
+        &["edit", "backup", "--file", file.to_str().unwrap()],
+        &store,
+        &desktop,
+    )
+    .unwrap();
+    assert_eq!(store.read("backup").unwrap()["mode"], "always");
+    let expected = call(&["backup", "show"], &store, &desktop).unwrap();
+    for patch in [
+        json!({"workspace":99}),
+        json!({"mode":"bad"}),
+        json!({"open_hotkey":"Super+W"}),
+        json!({"windows":false}),
+    ] {
+        let mut candidate = store.read("backup").unwrap();
+        for (k, v) in patch.as_object().unwrap() {
+            candidate[k] = v.clone();
+        }
+        std::fs::write(&file, candidate.to_string()).unwrap();
+        assert!(call(
+            &["backup", "edit", "--file", file.to_str().unwrap()],
+            &store,
+            &desktop
+        )
+        .is_err());
+        assert_eq!(
+            call(&["backup", "show"], &store, &desktop).unwrap(),
+            expected
+        );
+    }
+}
+
+#[test]
+fn gsettings_contract() {
+    let p = Command::new("bash")
+        .arg("tests/gsettings_contract.sh")
+        .arg(env!("CARGO_BIN_EXE_tws"))
+        .output()
+        .unwrap();
+    assert!(
+        p.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&p.stdout),
+        String::from_utf8_lossy(&p.stderr)
+    );
 }

@@ -1,4 +1,5 @@
 use crate::{home, output, Result};
+use std::collections::BTreeSet;
 use std::io::{self, Write};
 use std::path::PathBuf;
 
@@ -33,6 +34,27 @@ pub fn accelerator(raw: &str) -> Result<String> {
     modifiers.sort_unstable();
     modifiers.dedup();
     let key = key.ok_or("Hotkey is missing its key")?;
+    let key = match key.as_str() {
+        "escape" | "esc" => "Escape".to_owned(),
+        "return" | "enter" => "Return".to_owned(),
+        "tab" => "Tab".to_owned(),
+        "backspace" => "BackSpace".to_owned(),
+        "delete" => "Delete".to_owned(),
+        "home" => "Home".to_owned(),
+        "end" => "End".to_owned(),
+        "pageup" | "page_up" => "Page_Up".to_owned(),
+        "pagedown" | "page_down" => "Page_Down".to_owned(),
+        "left" => "Left".to_owned(),
+        "right" => "Right".to_owned(),
+        "up" => "Up".to_owned(),
+        "down" => "Down".to_owned(),
+        _ if key.starts_with('f')
+            && key[1..].parse::<u8>().is_ok_and(|n| (1..=35).contains(&n)) =>
+        {
+            key.to_uppercase()
+        }
+        _ => key,
+    };
     if modifiers.is_empty() {
         return Err("Use at least one modifier for a task shortcut".into());
     }
@@ -129,12 +151,83 @@ pub fn bind(id: &str, role: &str, chord: &str, command: &[String]) -> Result<()>
 }
 
 pub fn executable() -> PathBuf {
-    let installed = home().join(".local/bin/tws");
-    if installed.exists() {
-        installed
-    } else {
-        std::env::current_exe().unwrap_or_else(|_| "tws".into())
+    std::env::current_exe().unwrap_or_else(|_| home().join(".local/bin/tws"))
+}
+
+pub fn matches_output(chord: &str, contents: &str, excluded: &str) -> Vec<String> {
+    let mut matches = vec![];
+    for line in contents.lines() {
+        let mut parts = line.splitn(3, ' ');
+        let schema = parts.next().unwrap_or("");
+        let key = parts.next().unwrap_or("");
+        let value = parts.next().unwrap_or("");
+        if schema == excluded && key == "binding" {
+            continue;
+        }
+        if strings(value)
+            .iter()
+            .any(|s| accelerator(s).is_ok_and(|a| a == chord))
+        {
+            matches.push(format!("{schema} {key}"));
+        }
     }
+    matches
+}
+
+pub fn conflicts(chord: &str, id: &str, role: &str) -> Result<Vec<String>> {
+    let chord = accelerator(chord)?;
+    if chord.is_empty() {
+        return Ok(vec![]);
+    }
+    let excluded = schema(id, role);
+    let mut collisions: BTreeSet<String> = matches_output(
+        &chord,
+        &output("gsettings", &["list-recursively"])?,
+        &excluded,
+    )
+    .into_iter()
+    .collect();
+    for path in strings(&output("gsettings", &["get", MEDIA, "custom-keybindings"])?) {
+        let target = format!("{CUSTOM}:{path}");
+        // list-recursively prints the bare schema, so exclude by its path here.
+        if target == excluded {
+            continue;
+        }
+        collisions.extend(matches_output(
+            &chord,
+            &output("gsettings", &["list-recursively", &target])?,
+            &excluded,
+        ));
+    }
+    for root in [
+        home().join(".local/share/gnome-shell/extensions"),
+        PathBuf::from("/usr/share/gnome-shell/extensions"),
+    ] {
+        if let Ok(entries) = std::fs::read_dir(root) {
+            for extension in entries.flatten() {
+                let dir = extension.path().join("schemas");
+                if !dir.join("gschemas.compiled").exists() {
+                    continue;
+                }
+                let dir = dir.to_string_lossy();
+                let schemas = output("gsettings", &["--schemadir", &dir, "list-schemas"])?;
+                for name in schemas
+                    .lines()
+                    .filter(|s| s.starts_with("org.gnome.shell.extensions."))
+                {
+                    collisions.extend(matches_output(
+                        &chord,
+                        &output(
+                            "gsettings",
+                            &["--schemadir", &dir, "list-recursively", name],
+                        )?,
+                        &excluded,
+                    ));
+                }
+            }
+        }
+    }
+    Ok(collisions.into_iter().collect())
 }
 
 pub fn terminal(args: &[String]) -> Vec<String> {

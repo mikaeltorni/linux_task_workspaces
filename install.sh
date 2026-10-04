@@ -36,6 +36,8 @@ for package in tmux libglib2.0-bin; do
     fi
 done
 binary=${TWS_BINARY:-$SCRIPT_DIR/target/release/tws}
+command_name=${TWS_COMMAND:-tws}
+[[ "$command_name" =~ ^[a-zA-Z][a-zA-Z0-9_-]*$ ]] || { printf 'Invalid TWS_COMMAND\n' >&2; exit 1; }
 if [[ -z ${TWS_BINARY:-} ]]; then
     if ! command -v cargo >/dev/null; then
         printf 'Rust compiler required. Install Rust, or run: sudo apt-get install -y cargo rustc\n' >&2
@@ -47,6 +49,9 @@ extension="$TARGET_HOME/.local/share/gnome-shell/extensions/task-workspaces@loca
 run_as_target mkdir -p "$extension" "$TARGET_HOME/.local/bin"
 run_as_target cp "$SCRIPT_DIR/extension/extension.js" "$SCRIPT_DIR/extension/geometry.js" "$SCRIPT_DIR/extension/metadata.json" "$extension/"
 run_as_target install -m 755 "$binary" "$TARGET_HOME/.local/bin/tws"
+if [[ "$command_name" != tws ]]; then
+    run_as_target install -m 755 "$binary" "$TARGET_HOME/.local/bin/$command_name"
+fi
 run_as_target mkdir -p "$TARGET_HOME/.config/systemd/user"
 unit=$(mktemp)
 trap 'rm -f "$unit"' EXIT

@@ -1,3 +1,4 @@
+pub mod config;
 pub mod hotkeys;
 pub mod tmux;
 
@@ -16,6 +17,9 @@ pub trait Bridge {
     fn action(&self, action: Value) -> Result<Value>;
     fn bind(&self, id: &str, role: &str, chord: &str, command: &[String]) -> Result<()> {
         hotkeys::bind(id, role, chord, command)
+    }
+    fn conflicts(&self, chord: &str, id: &str, role: &str) -> Result<Vec<String>> {
+        hotkeys::conflicts(chord, id, role)
     }
 }
 
@@ -274,9 +278,9 @@ pub fn restore_windows(
 pub fn run(args: &[String], store: &Store, bridge: &dyn Bridge) -> Result<String> {
     let a: Vec<&str> = args.iter().map(String::as_str).collect();
     match a.as_slice() {
-        [] | ["--help"] | ["-h"] => Ok("tws create ID | list | ID show | ID hide | ID close\ntws configure [ID] [--open Super+B | --close Ctrl+Super+B | --mode always|on-demand | --close-action hide|close]\ntws configure --launcher Control+Alt+Super+W\nRemember named GNOME task workspaces and tmux sessions.\n".into()),
+        [] | ["--help"] | ["-h"] => Ok("tws create ID | list | ID show | ID hide | ID close\ntws configure [ID] [--open Super+B | --close Ctrl+Super+B | --mode always|on-demand | --close-action hide|close]\ntws configure --launcher Control+Alt+Super+W\ntws edit ID | ID edit [--json | --file PATH]\ntws conflicts HOTKEY\nTWS_EDIT_ID=ID tws\nRemember named GNOME task workspaces and tmux sessions.\n".into()),
         ["configure", "--launcher", chord] => {
-            let normalized = hotkeys::accelerator(chord)?;
+            let normalized = config::check_hotkey(store,bridge,"configuration","launcher",chord)?;
             let command = hotkeys::terminal(&[hotkeys::executable().to_string_lossy().into_owned(),"configure".into()]);
             bridge.bind("configuration", "launcher", &normalized, &command)?;
             Ok(format!("Configuration shortcut: {normalized}\n"))
@@ -286,20 +290,23 @@ pub fn run(args: &[String], store: &Store, bridge: &dyn Bridge) -> Result<String
             run(&["configure".into(),id], store, bridge)
         },
         ["configure", id] => {
-            let current = if store.path(id)?.exists() { store.read(id)? } else {
+            let mut current = if store.path(id)?.exists() { store.read(id)? } else {
                 run(&["create".into(),(*id).into()],store,bridge)?;
                 store.read(id)?
             };
             let chord = hotkeys::prompt("Open hotkey (Super+B; - clears)",text(&current,"open_hotkey"))?;
-            run(&["configure".into(),(*id).into(),"--open".into(),chord],store,bridge)?;
+            current["open_hotkey"] = json!(chord);
             let mode = hotkeys::prompt("Mode (always / on-demand)",text(&current,"mode"))?;
-            run(&["configure".into(),(*id).into(),"--mode".into(),mode],store,bridge)?;
+            current["mode"] = json!(mode);
             let close = hotkeys::prompt("Hide/close hotkey (Ctrl+Super+B; - clears)",text(&current,"close_hotkey"))?;
-            run(&["configure".into(),(*id).into(),"--close".into(),close],store,bridge)
+            current["close_hotkey"] = json!(close);
+            let action = hotkeys::prompt("Close action (hide / close)",text(&current,"close_action"))?;
+            current["close_action"] = json!(action);
+            config::apply(store,bridge,id,current)
         },
         ["configure", id, "--open", chord] => {
             let mut profile = store.read(id)?;
-            let normalized = hotkeys::accelerator(chord)?;
+            let normalized = config::check_hotkey(store,bridge,id,"open",chord)?;
             bridge.bind(id,"open",&normalized,&[hotkeys::executable().to_string_lossy().into_owned(),"_activate".into(),(*id).into()])?;
             profile["open_hotkey"] = json!(normalized);
             store.write(id,&profile)?;
@@ -324,7 +331,7 @@ pub fn run(args: &[String], store: &Store, bridge: &dyn Bridge) -> Result<String
             Ok(format!("{id}: {action}\n"))
         },
         ["configure", id, "--close", chord] => {
-            let mut p = store.read(id)?; let chord = hotkeys::accelerator(chord)?;
+            let mut p = store.read(id)?; let chord = config::check_hotkey(store,bridge,id,"close",chord)?;
             bridge.bind(id,"close",&chord,&[hotkeys::executable().to_string_lossy().into_owned(),"_dismiss".into(),(*id).into()])?;
             p["close_hotkey"] = json!(chord); store.write(id,&p)?;
             Ok(format!("Hide/close shortcut for {id}: {chord}\n"))
@@ -343,6 +350,13 @@ pub fn run(args: &[String], store: &Store, bridge: &dyn Bridge) -> Result<String
         },
         ["_startup"] => {
             reconcile(store,bridge)?; Ok("Task workspaces reconciled\n".into())
+        },
+        ["edit", id] | [id,"edit"] => run(&["configure".into(),(*id).into()],store,bridge),
+        ["edit", id, "--json"] | [id,"edit","--json"] => config::edit_json(store,bridge,id),
+        ["edit", id, "--file", file] | [id,"edit","--file",file] => config::apply(store,bridge,id,serde_json::from_str(&fs::read_to_string(file)?)?),
+        ["conflicts", chord] => {
+            let hits = bridge.conflicts(&hotkeys::accelerator(chord)?,"","")?;
+            Ok(if hits.is_empty() { "Free in GNOME settings\n".into() } else { format!("{}\n",hits.join("\n")) })
         },
         ["list"] => Ok(store.list()?.iter().map(|p| format!("{}\tworkspace {}\t{} windows\n",
             text(p,"id"), p["workspace"].as_i64().unwrap_or(0)+1, p["windows"].as_array().map_or(0, Vec::len))).collect()),
