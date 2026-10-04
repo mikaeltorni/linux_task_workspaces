@@ -257,6 +257,14 @@ fn tmux_contract() {
         "-c",
         temp.path().to_str().unwrap(),
     ]);
+    // The default window index zero must also restore successfully.
+    let default_snapshot = linux_task_workspaces::tmux::snapshot(s, "backup").unwrap();
+    cmd(&["kill-session", "-t", "backup"]);
+    linux_task_workspaces::tmux::restore(&default_snapshot).unwrap();
+    assert_eq!(
+        linux_task_workspaces::tmux::snapshot(s, "backup").unwrap()["windows"][0]["index"],
+        0
+    );
     // Session structure includes gaps in window numbering and the active window.
     cmd(&["move-window", "-s", "backup:0", "-t", "backup:3"]);
     cmd(&[

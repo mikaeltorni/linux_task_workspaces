@@ -199,10 +199,16 @@ pub fn restore(session: &Value) -> Result<()> {
         };
         let wid = wid.trim();
         let index = w["index"].as_u64().ok_or("Invalid tmux window index")?;
-        run(
+        let current_index = run(
             socket,
-            &["move-window", "-s", wid, "-t", &format!("{exact}:{index}")],
+            &["display-message", "-p", "-t", wid, "#{window_index}"],
         )?;
+        if current_index.trim().parse::<u64>()? != index {
+            run(
+                socket,
+                &["move-window", "-s", wid, "-t", &format!("{exact}:{index}")],
+            )?;
+        }
         for p in &panes[1..] {
             run(socket, &["split-window", "-d", "-t", wid, "-c", &dir(p)])?;
             run(socket, &["select-layout", "-t", wid, "tiled"])?;
