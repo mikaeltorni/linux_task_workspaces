@@ -67,8 +67,18 @@ pub struct Store {
     pub root: PathBuf,
 }
 
+pub struct OperationLock(fs::File);
+
+impl Drop for OperationLock {
+    fn drop(&mut self) {
+        // A concurrent fork can briefly inherit the open file description.
+        // Explicitly unlock it rather than waiting for every inherited fd to close.
+        let _ = fs2::FileExt::unlock(&self.0);
+    }
+}
+
 impl Store {
-    pub fn lock(&self) -> Result<fs::File> {
+    pub fn lock(&self) -> Result<OperationLock> {
         fs::create_dir_all(&self.root)?;
         fs::set_permissions(&self.root, fs::Permissions::from_mode(0o700))?;
         let f = OpenOptions::new()
@@ -79,7 +89,7 @@ impl Store {
             .open(self.root.join(".lock"))?;
         fs2::FileExt::try_lock_exclusive(&f)
             .map_err(|_| "Another task workspace operation is in progress; retry shortly")?;
-        Ok(f)
+        Ok(OperationLock(f))
     }
     pub fn environment() -> Self {
         let root = std::env::var_os("TWS_CONFIG_HOME")
