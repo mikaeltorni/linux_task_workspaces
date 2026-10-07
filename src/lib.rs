@@ -17,6 +17,9 @@ pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 pub trait Bridge {
     fn snapshot(&self) -> Result<Value>;
     fn action(&self, action: Value) -> Result<Value>;
+    fn prompt(&self, label: &str, default: &str) -> Result<String> {
+        hotkeys::prompt(label, default)
+    }
     fn bind(&self, id: &str, role: &str, chord: &str, command: &[String]) -> Result<()> {
         hotkeys::bind(id, role, chord, command)
     }
@@ -321,7 +324,7 @@ pub fn run(args: &[String], store: &Store, bridge: &dyn Bridge) -> Result<String
 fn dispatch(args: &[String], store: &Store, bridge: &dyn Bridge) -> Result<String> {
     let a: Vec<&str> = args.iter().map(String::as_str).collect();
     match a.as_slice() {
-        [] | ["--help"] | ["-h"] => Ok("tws create ID | list | ID show | ID save | ID load | ID hide | ID close\ntws configure [ID] [--open Super+B | --close Ctrl+Super+B | --mode always|on-demand | --close-action hide|close]\ntws configure --launcher Control+Alt+Super+W\ntws edit ID | ID edit [--json | --file PATH]\ntws conflicts HOTKEY\ntws configure ID --launch INDEX JSON_ARGV\nTWS_EDIT_ID=ID tws | TWS_LOAD_ID=ID tws\nRemember named GNOME task workspaces and tmux sessions.\n".into()),
+        [] | ["--help"] | ["-h"] => Ok("tws create ID | list | ID show | ID save | ID load | ID hide | ID close\ntws configure [ID] [--open Super+B | --close Ctrl+Super+B | --mode always|on-demand | --close-action hide|close | --workspace NUMBER]\ntws configure --launcher Control+Alt+Super+W\ntws edit ID | ID edit [--json | --file PATH]\ntws conflicts HOTKEY\ntws configure ID --launch INDEX JSON_ARGV\nTWS_EDIT_ID=ID tws | TWS_LOAD_ID=ID tws\nRemember named GNOME task workspaces and tmux sessions.\n".into()),
         ["configure", "--launcher", chord] => {
             let normalized = config::check_hotkey(store,bridge,"configuration","launcher",chord)?;
             let command = hotkeys::terminal(&[hotkeys::executable().to_string_lossy().into_owned(),"configure".into()]);
@@ -329,23 +332,34 @@ fn dispatch(args: &[String], store: &Store, bridge: &dyn Bridge) -> Result<Strin
             Ok(format!("Configuration shortcut: {normalized}\n"))
         },
         ["configure"] => {
-            let id = hotkeys::prompt("Workspace ID", "")?;
+            let id = bridge.prompt("Workspace ID", "")?;
             dispatch(&["configure".into(),id], store, bridge)
         },
         ["configure", id] => {
-            let mut current = if store.path(id)?.exists() { store.read(id)? } else {
-                dispatch(&["create".into(),(*id).into()],store,bridge)?;
-                store.read(id)?
-            };
-            let chord = hotkeys::prompt("Open hotkey (Super+B; - clears)",text(&current,"open_hotkey"))?;
+            let exists = store.path(id)?.exists();
+            let mut current = if exists { store.read(id)? } else { prepare_profile(store,bridge,id)? };
+            let default = (current["workspace"].as_u64().ok_or("Invalid workspace")?.min(35)+1).to_string();
+            let number = bridge.prompt("GNOME workspace number (1–36)", &default)?;
+            let slot = config::workspace_number(&number)?;
+            if !exists || current["workspace"] != slot { current["workspace_assigned"] = json!(true); }
+            current["workspace"] = json!(slot);
+            let chord = bridge.prompt("Open hotkey (Super+B; - clears)",text(&current,"open_hotkey"))?;
             current["open_hotkey"] = json!(chord);
-            let mode = hotkeys::prompt("Mode (always / on-demand)",text(&current,"mode"))?;
+            let mode = bridge.prompt("Mode (always / on-demand)",text(&current,"mode"))?;
             current["mode"] = json!(mode);
-            let close = hotkeys::prompt("Hide/close hotkey (Ctrl+Super+B; - clears)",text(&current,"close_hotkey"))?;
+            let close = bridge.prompt("Hide/close hotkey (Ctrl+Super+B; - clears)",text(&current,"close_hotkey"))?;
             current["close_hotkey"] = json!(close);
-            let action = hotkeys::prompt("Close action (hide / close)",text(&current,"close_action"))?;
+            let action = bridge.prompt("Close action (hide / close)",text(&current,"close_action"))?;
             current["close_action"] = json!(action);
-            config::apply(store,bridge,id,current)
+            if exists { config::apply(store,bridge,id,current) } else { config::create(store,bridge,id,current) }
+        },
+        ["configure", id, "--workspace", number] => {
+            let slot = config::workspace_number(number)?;
+            let exists = store.path(id)?.exists();
+            let mut profile = if exists { store.read(id)? } else { prepare_profile(store,bridge,id)? };
+            profile["workspace"] = json!(slot);
+            profile["workspace_assigned"] = json!(true);
+            if exists { config::apply(store,bridge,id,profile) } else { config::create(store,bridge,id,profile) }
         },
         ["configure", id, "--open", chord] => {
             let mut profile = store.read(id)?;
@@ -437,13 +451,7 @@ fn dispatch(args: &[String], store: &Store, bridge: &dyn Bridge) -> Result<Strin
             text(p,"id"), p["workspace"].as_i64().unwrap_or(0)+1, p["windows"].as_array().map_or(0, Vec::len))).collect()),
         ["create", id] => {
             if store.path(id)?.exists() { return Err(format!("Workspace already exists: {id}").into()); }
-            let snapshot = bridge.snapshot()?;
-            let workspace = snapshot["active"].as_i64().ok_or("No active workspace")?;
-            let mut profile = capture(&snapshot, workspace)?;
-            let highest = store.list()?.iter().filter_map(|p| p["workspace"].as_i64()).max().unwrap_or(-1)+1;
-            let slot = snapshot["count"].as_i64().ok_or("Invalid workspace count")?.max(highest);
-            profile["version"] = json!(1); profile["id"] = json!(id); profile["workspace"] = json!(slot);
-            profile["mode"] = json!("on-demand"); profile["close_action"] = json!("hide"); profile["hidden"] = json!(false);
+            let profile = prepare_profile(store,bridge,id)?;
             config::validate(&profile,id)?;
             ensure(&profile,bridge)?;
             store.write(id, &profile)?;
@@ -455,8 +463,34 @@ fn dispatch(args: &[String], store: &Store, bridge: &dyn Bridge) -> Result<Strin
 }
 
 pub fn ensure(profile: &Value, bridge: &dyn Bridge) -> Result<()> {
-    bridge.action(json!({"op":"ensure","workspace":profile["workspace"],"name":format!("Task: {}",text(profile,"id"))}))?;
+    bridge.action(json!({"op":"ensure","workspace":profile["workspace"],"name":format!("Task: {}",text(profile,"id")),"preserve_name":profile["workspace_assigned"] == true}))?;
     Ok(())
+}
+
+fn prepare_profile(store: &Store, bridge: &dyn Bridge, id: &str) -> Result<Value> {
+    store.path(id)?;
+    let snapshot = bridge.snapshot()?;
+    let source = snapshot["active"].as_i64().ok_or("No active workspace")?;
+    let mut profile = capture(&snapshot, source)?;
+    let highest = store
+        .list()?
+        .iter()
+        .filter_map(|p| p["workspace"].as_i64())
+        .max()
+        .unwrap_or(-1)
+        + 1;
+    let slot = snapshot["count"]
+        .as_i64()
+        .ok_or("Invalid workspace count")?
+        .max(highest);
+    profile["version"] = json!(1);
+    profile["id"] = json!(id);
+    // Plain create still rejects exhaustion; the wizard can choose an existing slot.
+    profile["workspace"] = json!(slot);
+    profile["mode"] = json!("on-demand");
+    profile["close_action"] = json!("hide");
+    profile["hidden"] = json!(false);
+    Ok(profile)
 }
 
 pub fn reconcile(store: &Store, bridge: &dyn Bridge) -> Result<()> {

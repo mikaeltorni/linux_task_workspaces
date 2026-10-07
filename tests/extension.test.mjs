@@ -108,3 +108,14 @@ test('places and hides only selected saved windows', () => {
     f.instance.Action(JSON.stringify({op: 'close', workspace: 2, ids: ['42']}));
     assert.ok(f.calls.some(c => c[0] === 'delete'));
 });
+
+test('assigned destinations preserve existing names and unrelated workspaces', () => {
+    const f=fixture();
+    const result=JSON.parse(f.instance.Action(JSON.stringify({op:'ensure',workspace:1,name:'Task: backup',preserve_name:true})));
+    assert.equal(result.ok,true);
+    assert.deepEqual(Array.from(f.settings.get('workspace-names').slice(0,2)),['Main','Code']);
+    assert.equal(f.settings.get('num-workspaces'),8);
+    f.instance.Action(JSON.stringify({op:'ensure',workspace:4,name:'Task: backup',preserve_name:true}));
+    assert.equal(f.settings.get('workspace-names')[4],'Task: backup');
+    assert.ok(!f.calls.some(c=>c[0]==='focus'));
+});

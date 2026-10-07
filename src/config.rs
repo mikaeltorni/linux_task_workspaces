@@ -1,4 +1,4 @@
-use crate::{command_argv, hotkeys, text, Bridge, Result, Store};
+use crate::{command_argv, ensure, hotkeys, text, Bridge, Result, Store};
 use serde_json::{json, Value};
 use std::fs;
 use std::io::Write;
@@ -86,12 +86,41 @@ pub fn validate(profile: &Value, id: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn workspace_number(number: &str) -> Result<u64> {
+    let number = number
+        .parse::<u64>()
+        .map_err(|_| "Workspace number must be an integer 1–36")?;
+    if !(1..=36).contains(&number) {
+        return Err("Workspace number must be 1–36".into());
+    }
+    Ok(number - 1)
+}
+
 pub fn apply(store: &Store, bridge: &dyn Bridge, id: &str, mut profile: Value) -> Result<String> {
-    validate(&profile, id)?;
     let old = store.read(id)?;
     if profile["workspace"] != old["workspace"] {
-        return Err("A task's permanent workspace slot cannot be edited".into());
+        profile["workspace_assigned"] = json!(true);
     }
+    let changed = profile["workspace"] != old["workspace"]
+        || profile["workspace_assigned"] != old["workspace_assigned"];
+    persist(store, bridge, id, profile, changed)
+}
+
+pub fn create(store: &Store, bridge: &dyn Bridge, id: &str, profile: Value) -> Result<String> {
+    if store.path(id)?.exists() {
+        return Err(format!("Workspace already exists: {id}").into());
+    }
+    persist(store, bridge, id, profile, true)
+}
+
+fn persist(
+    store: &Store,
+    bridge: &dyn Bridge,
+    id: &str,
+    mut profile: Value,
+    reserve: bool,
+) -> Result<String> {
+    validate(&profile, id)?;
     let open = check_hotkey(store, bridge, id, "open", text(&profile, "open_hotkey"))?;
     let close = check_hotkey(store, bridge, id, "close", text(&profile, "close_hotkey"))?;
     if !open.is_empty() && open == close {
@@ -99,6 +128,9 @@ pub fn apply(store: &Store, bridge: &dyn Bridge, id: &str, mut profile: Value) -
     }
     profile["open_hotkey"] = json!(open);
     profile["close_hotkey"] = json!(close);
+    if reserve {
+        ensure(&profile, bridge)?;
+    }
     for (role, handler, chord) in [("open", "_activate", open), ("close", "_dismiss", close)] {
         bridge.bind(
             id,

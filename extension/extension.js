@@ -95,7 +95,8 @@ export default class TaskWorkspaces extends Extension {
                 const names = preferences.get_strv('workspace-names');
                 while (names.length < count)
                     names.push('');
-                names[a.workspace] = a.name;
+                if (!a.preserve_name || !names[a.workspace])
+                    names[a.workspace] = a.name;
                 preferences.set_strv('workspace-names', names);
                 return JSON.stringify({ok: true, workspace: a.workspace});
             }
