@@ -59,6 +59,7 @@ tws configure backups   # terminal wizard; creates a snapshot if needed
 tws configure backups --open Super+B
 tws configure --launcher Control+Alt+Super+W
 tws configure backups --mode always     # keep windows available after login
+tws configure backups --workspace 3    # choose GNOME workspace 3 (numbered from 1)
 tws configure backups --mode on-demand  # open on its shortcut
 tws configure backups --close Ctrl+Super+B
 tws configure backups --close-action hide  # default; or close
@@ -95,6 +96,28 @@ New task slots are appended after existing workspaces and named `Task: ID`.
 GNOME supports 36 static workspaces in total; creation rejects exhausted slots.
 Creation preserves the snapshot's source workspace, reserving the new slot until
 opened. Static workspace count is retained, and workspaces span all monitors.
+
+Choose an existing or new numbered workspace in `tws configure backups` or
+`tws edit backups`, or assign it directly:
+
+```sh
+tws configure backups --workspace 3
+tws configure backups --mode always
+tws backups load
+```
+
+The CLI and wizard accept GNOME workspace numbers 1–36; the JSON `workspace`
+field uses indices 0–35. Direct assignment can create a missing task from the
+current workspace's windows without allocating an extra slot, including when
+all 36 workspaces already exist. Existing destination names are preserved;
+unnamed destinations receive `Task: ID`. Tasks may share a workspace. Changing
+the assignment retains the saved windows, monitor layout, launch commands and
+tmux sessions; the previous static workspace remains available. `load` moves
+the remembered windows to the chosen workspace immediately; `always` mode does
+so during automatic reconciliation. Later `save` captures the chosen workspace.
+Attach the desired tmux session in each terminal before capturing the task;
+its saved terminal windows will then reopen on that workspace after login.
+
 The `task-workspaces.service` reconciles permanent slots and `always` windows
 every 20 seconds without focusing them. `on-demand` windows open only when
 requested. Hide minimizes just saved windows and preserves running tmux jobs;
@@ -133,8 +156,8 @@ can use `--launch INDEX JSON_ARGV` (zero-based snapshot window index) or a JSON
 edit to set their launch command and folder. Launch arrays preserve spaces and
 never pass through a shell; use `["bash","-lc","..."]` only if you want a shell.
 
-The GNOME bridge must be active: on Wayland a newly installed extension is
-discovered after manual logout/login; on X11 use GNOME's run-dialog reload.
+The GNOME bridge must be active: on Wayland a newly installed or updated extension
+requires manual logout/login; on X11 use GNOME's run-dialog reload.
 No installer terminates or restarts your session.
 
 Checks: `cargo test --locked`, `cargo clippy --locked --all-targets -- -D warnings`,

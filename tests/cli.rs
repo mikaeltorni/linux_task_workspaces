@@ -27,16 +27,34 @@ use std::process::Command;
 struct Desktop {
     actions: RefCell<Vec<Value>>,
     count: i64,
+    prompts: RefCell<Vec<String>>,
 }
 impl Desktop {
     fn new() -> Self {
         Self {
             actions: RefCell::new(vec![]),
             count: 8,
+            prompts: RefCell::new(vec![]),
         }
     }
 }
 impl Bridge for Desktop {
+    fn prompt(&self, label: &str, default: &str) -> Result<String> {
+        self.actions
+            .borrow_mut()
+            .push(json!({"prompt":label,"default":default}));
+        if self.prompts.borrow().is_empty() {
+            return Err("Test prompt cancelled".into());
+        }
+        let response = self.prompts.borrow_mut().remove(0);
+        Ok(if response.is_empty() {
+            default.into()
+        } else if response == "-" {
+            String::new()
+        } else {
+            response
+        })
+    }
     fn conflicts(&self, chord: &str, _id: &str, _role: &str) -> Result<Vec<String>> {
         Ok(if chord == "<Super>w" {
             vec!["org.gnome.desktop.wm.keybindings switch-to-workspace-6".into()]
@@ -120,6 +138,326 @@ fn call(args: &[&str], store: &Store, desktop: &Desktop) -> Result<String> {
         store,
         desktop,
     )
+}
+
+#[test]
+fn workspace_assignment_contract() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = Store {
+        root: temp.path().join("profiles"),
+    };
+    let desktop = Desktop::new();
+    call(&["create", "backup"], &store, &desktop).unwrap();
+    call(&["create", "other"], &store, &desktop).unwrap();
+    let other = call(&["other", "show"], &store, &desktop).unwrap();
+    let before: Value =
+        serde_json::from_str(&call(&["backup", "show"], &store, &desktop).unwrap()).unwrap();
+    call(
+        &["configure", "backup", "--workspace", "3"],
+        &store,
+        &desktop,
+    )
+    .unwrap();
+    let p: Value =
+        serde_json::from_str(&call(&["backup", "show"], &store, &desktop).unwrap()).unwrap();
+    assert_eq!(p["workspace"], 2);
+    assert_eq!(p["windows"], before["windows"]);
+    assert_eq!(call(&["other", "show"], &store, &desktop).unwrap(), other);
+    call(&["backup", "load"], &store, &desktop).unwrap();
+    call(
+        &["configure", "backup", "--mode", "always"],
+        &store,
+        &desktop,
+    )
+    .unwrap();
+    desktop.actions.borrow_mut().clear();
+    call(&["_startup"], &store, &desktop).unwrap();
+    let actions = desktop.actions.borrow();
+    let placements: Vec<_> = actions.iter().filter(|a| a["op"] == "place").collect();
+    assert_eq!(placements.len(), 2);
+    assert!(placements.iter().all(|a| a["workspace"] == 2));
+    assert!(!actions.iter().any(|a| a["op"] == "focus"));
+    drop(actions);
+    for number in ["1", "36"] {
+        call(
+            &["configure", "backup", "--workspace", number],
+            &store,
+            &desktop,
+        )
+        .unwrap();
+        let p: Value =
+            serde_json::from_str(&call(&["backup", "show"], &store, &desktop).unwrap()).unwrap();
+        assert_eq!(p["workspace"], number.parse::<u64>().unwrap() - 1);
+    }
+    let expected = call(&["backup", "show"], &store, &desktop).unwrap();
+    let list = call(&["list"], &store, &desktop).unwrap();
+    for args in [
+        vec!["configure", "backup", "--workspace"],
+        vec!["configure", "backup", "--workspace", "3", "extra"],
+        vec!["configure", "backup", "--workspace", "bad"],
+        vec!["configure", "backup", "--workspace", "0"],
+        vec!["configure", "backup", "--workspace", "37"],
+        vec!["configure", "backup", "--workspace", "99"],
+    ] {
+        let actions = desktop.actions.borrow().len();
+        assert!(call(&args, &store, &desktop).is_err());
+        assert_eq!(
+            call(&["backup", "show"], &store, &desktop).unwrap(),
+            expected
+        );
+        assert_eq!(call(&["other", "show"], &store, &desktop).unwrap(), other);
+        assert_eq!(call(&["list"], &store, &desktop).unwrap(), list);
+        assert_eq!(desktop.actions.borrow().len(), actions);
+    }
+}
+
+#[test]
+fn workspace_assignment_new_and_wizard() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = Store {
+        root: temp.path().join("profiles"),
+    };
+    let mut desktop = Desktop::new();
+    desktop.count = 36;
+    call(
+        &["configure", "backup", "--workspace", "3"],
+        &store,
+        &desktop,
+    )
+    .unwrap();
+    let p: Value =
+        serde_json::from_str(&call(&["backup", "show"], &store, &desktop).unwrap()).unwrap();
+    assert_eq!(p["workspace"], 2);
+    assert_eq!(p["windows"].as_array().unwrap().len(), 2);
+    assert!(desktop
+        .actions
+        .borrow()
+        .iter()
+        .filter(|a| a["op"] == "ensure")
+        .all(|a| a["workspace"] == 2 && a["preserve_name"] == true));
+    let expected = call(&["backup", "show"], &store, &desktop).unwrap();
+    let list = call(&["list"], &store, &desktop).unwrap();
+    for number in ["bad", "0", "37"] {
+        assert!(call(
+            &["configure", "invalid", "--workspace", number],
+            &store,
+            &desktop
+        )
+        .is_err());
+        assert_eq!(
+            call(&["backup", "show"], &store, &desktop).unwrap(),
+            expected
+        );
+        assert_eq!(call(&["list"], &store, &desktop).unwrap(), list);
+    }
+    *desktop.prompts.borrow_mut() = vec!["wizard", "3", "", "always", "", "hide"]
+        .into_iter()
+        .map(String::from)
+        .collect();
+    call(&["configure"], &store, &desktop).unwrap();
+    let p: Value =
+        serde_json::from_str(&call(&["wizard", "show"], &store, &desktop).unwrap()).unwrap();
+    assert_eq!(p["workspace"], 2);
+    assert_eq!(p["mode"], "always");
+    for args in [vec!["edit", "wizard"], vec!["wizard", "edit"]] {
+        *desktop.prompts.borrow_mut() = vec!["4", "", "on-demand", "", "hide"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        call(&args, &store, &desktop).unwrap();
+        let p: Value =
+            serde_json::from_str(&call(&["wizard", "show"], &store, &desktop).unwrap()).unwrap();
+        assert_eq!(p["workspace"], 3);
+    }
+    let list = call(&["list"], &store, &desktop).unwrap();
+    let effects = desktop
+        .actions
+        .borrow()
+        .iter()
+        .filter(|a| a.get("prompt").is_none())
+        .count();
+    *desktop.prompts.borrow_mut() = vec!["5", "Super+W", "always", "", "hide"]
+        .into_iter()
+        .map(String::from)
+        .collect();
+    assert!(call(&["configure", "collision"], &store, &desktop).is_err());
+    assert_eq!(call(&["list"], &store, &desktop).unwrap(), list);
+    assert_eq!(
+        call(&["backup", "show"], &store, &desktop).unwrap(),
+        expected
+    );
+    assert_eq!(
+        desktop
+            .actions
+            .borrow()
+            .iter()
+            .filter(|a| a.get("prompt").is_none())
+            .count(),
+        effects
+    );
+    let wizard = call(&["wizard", "show"], &store, &desktop).unwrap();
+    for (id, responses) in [
+        ("cancelled", vec!["5"]),
+        ("wizard", vec!["5"]),
+        ("invalid", vec!["bad"]),
+        ("invalid", vec!["0"]),
+        ("invalid", vec!["37"]),
+    ] {
+        *desktop.prompts.borrow_mut() = responses.into_iter().map(String::from).collect();
+        let effects = desktop
+            .actions
+            .borrow()
+            .iter()
+            .filter(|a| a.get("prompt").is_none())
+            .count();
+        assert!(call(&["configure", id], &store, &desktop).is_err());
+        assert_eq!(
+            call(&["backup", "show"], &store, &desktop).unwrap(),
+            expected
+        );
+        assert_eq!(call(&["wizard", "show"], &store, &desktop).unwrap(), wizard);
+        assert_eq!(call(&["list"], &store, &desktop).unwrap(), list);
+        assert_eq!(
+            desktop
+                .actions
+                .borrow()
+                .iter()
+                .filter(|a| a.get("prompt").is_none())
+                .count(),
+            effects
+        );
+    }
+}
+
+#[test]
+fn workspace_assignment_import_and_rejections() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = Store {
+        root: temp.path().join("profiles"),
+    };
+    let desktop = Desktop::new();
+    call(&["create", "backup"], &store, &desktop).unwrap();
+    let mut p: Value =
+        serde_json::from_str(&call(&["backup", "show"], &store, &desktop).unwrap()).unwrap();
+    p["workspace"] = json!(1);
+    p["mode"] = json!("always");
+    let file = temp.path().join("edit.json");
+    std::fs::write(&file, p.to_string()).unwrap();
+    call(
+        &["edit", "backup", "--file", file.to_str().unwrap()],
+        &store,
+        &desktop,
+    )
+    .unwrap();
+    let expected = call(&["backup", "show"], &store, &desktop).unwrap();
+    let actual: Value = serde_json::from_str(&expected).unwrap();
+    let list = call(&["list"], &store, &desktop).unwrap();
+    assert_eq!(actual["workspace"], 1);
+    assert_eq!(actual["windows"], p["windows"]);
+    assert_eq!(actual["workspace_assigned"], true);
+    for patch in [
+        json!({"workspace":36}),
+        json!({"workspace":-1}),
+        json!({"workspace":"bad"}),
+        json!({"workspace":3,"open_hotkey":"Super+W"}),
+        json!({"workspace":3,"id":"other"}),
+        json!({"workspace":3,"version":2}),
+        json!({"workspace":3,"mode":"invalid"}),
+        json!({"workspace":3,"close_action":"invalid"}),
+        json!({"workspace":3,"monitors":[]}),
+        json!({"workspace":3,"monitors":[{"connector":"DP-1","width":0,"height":1080}]}),
+        json!({"workspace":3,"windows":[{"class":"kitty","rect":[0,0,0,10],"launch":[]}]}),
+    ] {
+        let mut candidate = actual.clone();
+        for (k, v) in patch.as_object().unwrap() {
+            candidate[k] = v.clone();
+        }
+        std::fs::write(&file, candidate.to_string()).unwrap();
+        let actions = desktop.actions.borrow().len();
+        assert!(call(
+            &["edit", "backup", "--file", file.to_str().unwrap()],
+            &store,
+            &desktop
+        )
+        .is_err());
+        assert_eq!(
+            call(&["backup", "show"], &store, &desktop).unwrap(),
+            expected
+        );
+        assert_eq!(desktop.actions.borrow().len(), actions);
+        assert_eq!(call(&["list"], &store, &desktop).unwrap(), list);
+    }
+    for path in [file.clone(), temp.path().join("missing.json")] {
+        std::fs::write(&file, "invalid JSON").unwrap();
+        let actions = desktop.actions.borrow().len();
+        assert!(call(
+            &["edit", "backup", "--file", path.to_str().unwrap()],
+            &store,
+            &desktop
+        )
+        .is_err());
+        assert_eq!(
+            call(&["backup", "show"], &store, &desktop).unwrap(),
+            expected
+        );
+        assert_eq!(call(&["list"], &store, &desktop).unwrap(), list);
+        assert_eq!(desktop.actions.borrow().len(), actions);
+    }
+}
+
+#[test]
+fn shared_dispatch_rejections() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = Store {
+        root: temp.path().join("profiles"),
+    };
+    let desktop = Desktop::new();
+    call(&["create", "backup"], &store, &desktop).unwrap();
+    let expected = call(&["backup", "show"], &store, &desktop).unwrap();
+    let list = call(&["list"], &store, &desktop).unwrap();
+    let mut invalid = vec![
+        vec!["--help", "extra"],
+        vec!["list", "extra"],
+        vec!["create"],
+        vec!["create", "new", "extra"],
+        vec!["backup"],
+        vec!["backup", "show", "extra"],
+        vec!["configure", "backup", "extra"],
+        vec!["configure", "--launcher"],
+        vec!["configure", "--launcher", "Super+B", "extra"],
+        vec!["edit"],
+        vec!["edit", "backup", "--json", "extra"],
+        vec!["backup", "edit", "--json", "extra"],
+        vec!["edit", "backup", "--file"],
+        vec!["edit", "backup", "--file", "missing", "extra"],
+        vec!["backup", "edit", "--file"],
+        vec!["backup", "edit", "--file", "missing", "extra"],
+        vec!["conflicts"],
+        vec!["conflicts", "Super+B", "extra"],
+        vec!["_startup", "extra"],
+        vec!["configure", "backup", "--launch"],
+        vec!["configure", "backup", "--launch", "0"],
+        vec!["configure", "backup", "--launch", "0", "[]", "extra"],
+    ];
+    for flag in ["--open", "--close", "--mode", "--close-action"] {
+        invalid.push(vec!["configure", "backup", flag]);
+        invalid.push(vec!["configure", "backup", flag, "value", "extra"]);
+    }
+    for operation in ["save", "load", "hide", "close"] {
+        invalid.push(vec!["backup", operation, "extra"]);
+    }
+    for operation in ["_activate", "_dismiss"] {
+        invalid.push(vec![operation]);
+        invalid.push(vec![operation, "backup", "extra"]);
+    }
+    for args in invalid {
+        assert!(call(&args, &store, &desktop).is_err(), "accepted {args:?}");
+        assert_eq!(
+            call(&["backup", "show"], &store, &desktop).unwrap(),
+            expected
+        );
+        assert_eq!(call(&["list"], &store, &desktop).unwrap(), list);
+    }
 }
 
 #[test]
@@ -284,6 +622,52 @@ fn tmux_contract() {
         temp.path().to_str().unwrap()
     );
     let before = cmd(&["list-panes", "-t", "backup", "-F", "#{pane_pid}"]);
+    let store = Store {
+        root: temp.path().join("profiles"),
+    };
+    let desktop = Desktop::new();
+    call(&["create", "backup"], &store, &desktop).unwrap();
+    let mut profile: Value =
+        serde_json::from_str(&call(&["backup", "show"], &store, &desktop).unwrap()).unwrap();
+    profile["windows"][0]["tmux"] = json!([snapshot.clone()]);
+    let file = temp.path().join("task.json");
+    std::fs::write(&file, profile.to_string()).unwrap();
+    call(
+        &["edit", "backup", "--file", file.to_str().unwrap()],
+        &store,
+        &desktop,
+    )
+    .unwrap();
+    call(
+        &["configure", "backup", "--workspace", "3"],
+        &store,
+        &desktop,
+    )
+    .unwrap();
+    call(
+        &["configure", "backup", "--mode", "always"],
+        &store,
+        &desktop,
+    )
+    .unwrap();
+    desktop.actions.borrow_mut().clear();
+    call(&["_startup"], &store, &desktop).unwrap();
+    let actions = desktop.actions.borrow();
+    assert_eq!(
+        actions
+            .iter()
+            .filter(|a| a["op"] == "place" && a["workspace"] == 2)
+            .count(),
+        2
+    );
+    assert!(!actions.iter().any(|a| a["op"] == "focus"));
+    drop(actions);
+    assert_eq!(
+        cmd(&["list-panes", "-t", "backup", "-F", "#{pane_pid}"]),
+        before
+    );
+    let live = linux_task_workspaces::tmux::snapshot(s, "backup").unwrap();
+    assert_eq!(live["windows"], snapshot["windows"]);
     linux_task_workspaces::tmux::restore(&snapshot).unwrap();
     assert_eq!(
         cmd(&["list-panes", "-t", "backup", "-F", "#{pane_pid}"]),
