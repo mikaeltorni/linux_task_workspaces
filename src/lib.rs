@@ -2,6 +2,7 @@ pub mod chrome;
 pub mod config;
 pub mod folders;
 pub mod hotkeys;
+pub mod terminals;
 pub mod tmux;
 
 use serde_json::{json, Value};
@@ -167,7 +168,11 @@ impl Store {
     }
 }
 
+/// Capture task windows while excluding ACC windows and non-tmux terminals.
+/// Parameters: snapshot - GNOME windows and monitor metadata; workspace - zero-based source slot.
+/// Returns: saved eligible windows and their monitor layout, or a snapshot error.
 pub fn capture(snapshot: &Value, workspace: i64) -> Result<Value> {
+    eprintln!("snapshot={snapshot}, workspace={workspace}");
     let mut windows = vec![];
     for w in snapshot["windows"]
         .as_array()
@@ -176,8 +181,14 @@ pub fn capture(snapshot: &Value, workspace: i64) -> Result<Value> {
         if w["workspace"].as_i64() != Some(workspace) || w["sticky"] == true {
             continue;
         }
+        if terminals::is_acc(w, &[]) {
+            continue;
+        }
         let mut w = w.clone();
         let sessions = tmux::attached_sessions(w["pid"].as_u64().unwrap_or(0) as u32)?;
+        if terminals::is_acc(&w, &sessions) || (sessions.is_empty() && terminals::is_terminal(&w)) {
+            continue;
+        }
         w["tmux"] = json!(sessions);
         w["launch"] = if let Some(s) = sessions.first() {
             json!([
@@ -197,7 +208,9 @@ pub fn capture(snapshot: &Value, workspace: i64) -> Result<Value> {
         folders::attach(&mut w, &snapshot["folder_locations"]);
         windows.push(w);
     }
-    Ok(json!({"windows": windows, "monitors": snapshot["monitors"]}))
+    let result = Ok(json!({"windows": windows, "monitors": snapshot["monitors"]}));
+    eprintln!("{result:?}");
+    result
 }
 
 pub fn text<'a>(v: &'a Value, key: &str) -> &'a str {

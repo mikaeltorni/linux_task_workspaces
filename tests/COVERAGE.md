@@ -61,3 +61,13 @@ on an assigned slot preserves live pane processes, window indices, and CWDs.
 Node's destination-name case verifies named workspace 2 remains Code, an unnamed
 chosen slot receives Task: backup, other names/count survive, and no focus occurs.
 GNOME's 36-slot bound is an existing platform limitation, not a new user rule.
+
+## Terminal capture exclusions
+
+`terminal_capture::capture_exclusions` uses real isolated tmux clients in headless
+pseudo-terminals and fake GNOME windows. It proves create/save exclude ACC class
+windows even with ordinary tmux, reserved ACC sessions/monitor, plain terminals
+across common classes and custom TerminalEmulator desktop entries; task tmux,
+Chrome tabs and folder locations remain. Malformed CLI and invalid snapshot
+rejections immediately read the populated saved profile. General layout fixtures
+now use ordinary application windows; pid-zero Kitty inclusion was superseded.
