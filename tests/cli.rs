@@ -138,12 +138,18 @@ fn lock_release_during_process_launches() {
         }
     });
 }
-fn call(args: &[&str], store: &Store, desktop: &Desktop) -> Result<String> {
-    run(
+/// Exercise the public dispatcher with an isolated store and injected desktop.
+/// Parameters: args - public CLI tokens; store - temporary profile storage; desktop - injected bridge.
+/// Returns: the public command output or rejection.
+fn call(args: &[&str], store: &Store, desktop: &dyn Bridge) -> Result<String> {
+    eprintln!("args={args:?}, store={:?}, desktop={desktop:p}", store.root);
+    let result = run(
         &args.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
         store,
         desktop,
-    )
+    );
+    eprintln!("{result:?}");
+    result
 }
 
 #[test]
@@ -558,16 +564,25 @@ fn installed_entrypoint() {
         .exists());
 }
 
+/// Check real tmux structure, process reuse and assigned startup placement.
+/// Parameters: none.
+/// Returns: None.
 #[test]
 fn tmux_contract() {
+    eprintln!("parameters=none");
     struct TestServer(std::path::PathBuf);
     impl Drop for TestServer {
+        /// Close only the isolated server owned by this test.
+        /// Parameters: self - test socket guard.
+        /// Returns: None.
         fn drop(&mut self) {
+            eprintln!("self={self:p}");
             let _ = Command::new("tmux")
                 .arg("-S")
                 .arg(&self.0)
                 .arg("kill-server")
                 .output();
+            eprintln!("None");
         }
     }
     let temp = tempfile::tempdir().unwrap();
@@ -631,19 +646,94 @@ fn tmux_contract() {
     let store = Store {
         root: temp.path().join("profiles"),
     };
-    let desktop = Desktop::new();
+    struct SessionDesktop {
+        client: std::process::Child,
+        actions: RefCell<Vec<Value>>,
+    }
+    impl Drop for SessionDesktop {
+        /// Release the test's headless tmux client.
+        /// Parameters: self - client and recorded desktop actions.
+        /// Returns: None.
+        fn drop(&mut self) {
+            eprintln!("self={self:p}");
+            let _ = self.client.kill();
+            let _ = self.client.wait();
+            eprintln!("None");
+        }
+    }
+    impl Bridge for SessionDesktop {
+        /// Associate the first simulated terminal with a real attached client.
+        /// Parameters: self - isolated attached client.
+        /// Returns: a desktop snapshot containing one tmux terminal and one GUI app.
+        fn snapshot(&self) -> Result<Value> {
+            eprintln!("self={self:p}");
+            let mut state = Desktop::new().snapshot()?;
+            state["windows"][0]["pid"] = json!(self.client.id());
+            state["windows"][0]["class"] = json!("kitty");
+            state["windows"][0]["app"] = json!("kitty.desktop");
+            let result = Ok(state);
+            eprintln!("{result:?}");
+            result
+        }
+        /// Record simulated placement without manipulating actual windows.
+        /// Parameters: self - action fixture; action - requested GNOME mutation.
+        /// Returns: a successful bridge acknowledgement.
+        fn action(&self, action: Value) -> Result<Value> {
+            eprintln!("self={self:p}, action={action}");
+            self.actions.borrow_mut().push(action);
+            let result = Ok(json!({"ok":true}));
+            eprintln!("{result:?}");
+            result
+        }
+        /// Suppress external shortcut changes in the isolated test.
+        /// Parameters: self - bridge fixture; id - task; role - shortcut role; chord - key; command - launch argv.
+        /// Returns: a successful binding acknowledgement.
+        fn bind(&self, id: &str, role: &str, chord: &str, command: &[String]) -> Result<()> {
+            eprintln!("self={self:p}, id={id}, role={role}, chord={chord}, command={command:?}");
+            let result = Ok(());
+            eprintln!("{result:?}");
+            result
+        }
+        /// Fail safely if a regression tries to launch a GUI.
+        /// Parameters: self - isolated bridge; argv - attempted launch.
+        /// Returns: a rejected launch error.
+        fn launch(&self, argv: &[String]) -> Result<()> {
+            eprintln!("self={self:p}, argv={argv:?}");
+            Err("Unexpected GUI launch in tmux regression".into())
+        }
+    }
+    let client = Command::new("script")
+        .args([
+            "-q",
+            "-c",
+            &format!("tmux -S '{s}' attach-session -t '=backup'"),
+            "/dev/null",
+        ])
+        .env_remove("TMUX")
+        .env("TERM", "xterm-256color")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let desktop = SessionDesktop {
+        client,
+        actions: RefCell::new(vec![]),
+    };
+    let start = std::time::Instant::now();
+    while cmd(&["list-clients", "-F", "#{client_pid}"])
+        .trim()
+        .is_empty()
+    {
+        assert!(start.elapsed() < std::time::Duration::from_secs(5));
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    // Attaching a real client resizes panes; compare against that live baseline.
+    let snapshot = linux_task_workspaces::tmux::snapshot(s, "backup").unwrap();
     call(&["create", "backup"], &store, &desktop).unwrap();
-    let mut profile: Value =
+    let profile: Value =
         serde_json::from_str(&call(&["backup", "show"], &store, &desktop).unwrap()).unwrap();
-    profile["windows"][0]["tmux"] = json!([snapshot.clone()]);
-    let file = temp.path().join("task.json");
-    std::fs::write(&file, profile.to_string()).unwrap();
-    call(
-        &["edit", "backup", "--file", file.to_str().unwrap()],
-        &store,
-        &desktop,
-    )
-    .unwrap();
+    assert_eq!(profile["windows"][0]["tmux"][0]["name"], "backup");
     call(
         &["configure", "backup", "--workspace", "3"],
         &store,
@@ -689,6 +779,7 @@ fn tmux_contract() {
     assert_eq!(restored["windows"][1]["name"], "upload");
     assert_eq!(restored["windows"][0]["active"], true);
     cmd(&["kill-server"]); // only this isolated test socket
+    eprintln!("None");
 }
 
 #[test]

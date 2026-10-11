@@ -241,11 +241,128 @@ pub fn command_argv(w: &Value) -> Result<Vec<String>> {
         .collect()
 }
 
+/// Compare stable tmux session identities independently of terminal titles.
+/// Parameters: left - first session snapshot; right - second session snapshot.
+/// Returns: whether both sessions use the same socket and exact session name.
+fn same_session(left: &Value, right: &Value) -> bool {
+    eprintln!("left={left}, right={right}");
+    let a = text(left, "socket");
+    let b = text(right, "socket");
+    let result = !a.is_empty()
+        && text(left, "name") == text(right, "name")
+        && (a == b
+            || fs::canonicalize(a)
+                .ok()
+                .zip(fs::canonicalize(b).ok())
+                .is_some_and(|(a, b)| a == b));
+    eprintln!("{result}");
+    result
+}
+
+/// Resolve a saved window using attached session identity for terminals.
+/// Parameters: saved - saved window; current - live windows; used - already placed identities; workspace - destination slot.
+/// Returns: a reusable eligible window, or None when a launch is needed.
+fn matching_window(
+    saved: &Value,
+    current: &[Value],
+    used: &[String],
+    workspace: &Value,
+) -> Result<Option<Value>> {
+    eprintln!("saved={saved}, current={current:?}, used={used:?}, workspace={workspace}");
+    let sessions = saved["tmux"].as_array().cloned().unwrap_or_default();
+    let candidates: Vec<_> = current
+        .iter()
+        .filter(|w| {
+            !used.iter().any(|id| id == text(w, "id"))
+                && w["sticky"] != true
+                && !terminals::is_acc(w, &[])
+        })
+        .collect();
+    let found = if sessions.is_empty() {
+        candidates
+            .iter()
+            .find(|w| {
+                w["id"] == saved["id"] && w["pid"] == saved["pid"] && w["class"] == saved["class"]
+            })
+            .or_else(|| {
+                candidates.iter().find(|w| {
+                    w["workspace"] == *workspace
+                        && w["class"] == saved["class"]
+                        && w["title"] == saved["title"]
+                })
+            })
+            .map(|w| (*w).clone())
+    } else {
+        let mut eligible = vec![];
+        for w in candidates {
+            let attached = tmux::attached_sessions(w["pid"].as_u64().unwrap_or(0) as u32)?;
+            if !terminals::is_acc(w, &attached)
+                && sessions
+                    .iter()
+                    .any(|saved| attached.iter().any(|actual| same_session(saved, actual)))
+            {
+                eligible.push(w);
+            }
+        }
+        eligible
+            .iter()
+            .find(|w| w["id"] == saved["id"] && w["pid"] == saved["pid"])
+            .or_else(|| eligible.iter().find(|w| w["workspace"] == *workspace))
+            .or_else(|| eligible.first())
+            .map(|w| (*w).clone())
+    };
+    let result = Ok(found);
+    eprintln!("{result:?}");
+    result
+}
+
+/// Bind existing attached clients to their task slot without opening applications.
+/// Parameters: profile - task's session/window templates and workspace; bridge - current desktop.
+/// Returns: identities moved to the assigned workspace.
+fn bind_existing_tmux_windows(profile: &Value, bridge: &dyn Bridge) -> Result<Vec<String>> {
+    eprintln!("profile={profile}, bridge={bridge:p}");
+    let snapshot = bridge.snapshot()?;
+    let mut moved = vec![];
+    let templates = profile["windows"]
+        .as_array()
+        .ok_or("Invalid saved windows")?;
+    for w in snapshot["windows"].as_array().ok_or("Invalid snapshot")? {
+        if w["workspace"] == profile["workspace"]
+            || w["sticky"] == true
+            || terminals::is_acc(w, &[])
+        {
+            continue;
+        }
+        let attached = tmux::attached_sessions(w["pid"].as_u64().unwrap_or(0) as u32)?;
+        if attached.is_empty() || terminals::is_acc(w, &attached) {
+            continue;
+        }
+        let template = templates.iter().find(|saved| {
+            let sessions = saved["tmux"].as_array().cloned().unwrap_or_default();
+            !terminals::is_acc(saved, &sessions)
+                && sessions
+                    .iter()
+                    .any(|s| attached.iter().any(|a| same_session(s, a)))
+        });
+        if let Some(saved) = template {
+            bridge.action(json!({"op":"place","id":w["id"],"workspace":profile["workspace"],"window":saved,"monitors":profile["monitors"]}))?;
+            moved.push(text(w, "id").to_owned());
+        }
+    }
+    let result = Ok(moved);
+    eprintln!("{result:?}");
+    result
+}
+
+/// Restore eligible task windows, matching tmux clients by socket and session.
+/// Parameters: profile - saved task updated with live identities; bridge - desktop operations; focus - whether to activate its slot.
+/// Returns: restored window identities, or a restoration error.
 pub fn restore_windows(
     profile: &mut Value,
     bridge: &dyn Bridge,
     focus: bool,
 ) -> Result<Vec<String>> {
+    eprintln!("profile={profile}, bridge={bridge:p}, focus={focus}");
     let mut current = bridge.snapshot()?["windows"]
         .as_array()
         .ok_or("Invalid snapshot")?
@@ -257,29 +374,16 @@ pub fn restore_windows(
         .as_array_mut()
         .ok_or("Invalid saved windows")?
     {
+        let sessions = saved["tmux"].as_array().cloned().unwrap_or_default();
+        if terminals::is_acc(saved, &sessions)
+            || (sessions.is_empty() && terminals::is_terminal(saved))
+        {
+            continue;
+        }
         for session in saved["tmux"].as_array().unwrap_or(&vec![]) {
             tmux::restore(session)?;
         }
-        let mut found = current
-            .iter()
-            .find(|w| {
-                w["id"] == saved["id"]
-                    && w["pid"] == saved["pid"]
-                    && w["class"] == saved["class"]
-                    && !used.iter().any(|id| id == text(w, "id"))
-            })
-            .cloned();
-        if found.is_none() {
-            found = current
-                .iter()
-                .find(|w| {
-                    w["workspace"] == workspace
-                        && w["class"] == saved["class"]
-                        && w["title"] == saved["title"]
-                        && !used.iter().any(|id| id == text(w, "id"))
-                })
-                .cloned();
-        }
+        let mut found = matching_window(saved, &current, &used, &workspace)?;
         if found.is_none() {
             let before: Vec<String> = current.iter().map(|w| text(w, "id").to_owned()).collect();
             bridge.launch(&command_argv(saved)?)?;
@@ -292,14 +396,22 @@ pub fn restore_windows(
                     .as_array()
                     .ok_or("Invalid snapshot")?
                     .clone();
-                found = current
+                let appeared: Vec<_> = current
                     .iter()
-                    .find(|w| {
-                        w["class"] == saved["class"]
-                            && !before.iter().any(|id| id == text(w, "id"))
-                            && !used.iter().any(|id| id == text(w, "id"))
-                    })
-                    .cloned();
+                    .filter(|w| !before.iter().any(|id| id == text(w, "id")))
+                    .cloned()
+                    .collect();
+                found = if sessions.is_empty() {
+                    appeared
+                        .iter()
+                        .find(|w| {
+                            w["class"] == saved["class"]
+                                && !used.iter().any(|id| id == text(w, "id"))
+                        })
+                        .cloned()
+                } else {
+                    matching_window(saved, &appeared, &used, &workspace)?
+                };
                 if found.is_some() {
                     break;
                 }
@@ -317,10 +429,13 @@ pub fn restore_windows(
         saved["id"] = w["id"].clone();
         saved["pid"] = w["pid"].clone();
     }
+    used.extend(bind_existing_tmux_windows(profile, bridge)?);
     if focus {
         bridge.action(json!({"op":"focus", "workspace":workspace}))?;
     }
-    Ok(used)
+    let result = Ok(used);
+    eprintln!("{result:?}");
+    result
 }
 
 pub fn run(args: &[String], store: &Store, bridge: &dyn Bridge) -> Result<String> {
@@ -514,7 +629,11 @@ pub fn reconcile(store: &Store, bridge: &dyn Bridge) -> Result<()> {
     reconcile_locked(store, bridge)
 }
 
+/// Reconcile permanent slots, existing tmux bindings and always-mode windows.
+/// Parameters: store - locked task profile store; bridge - current desktop operations.
+/// Returns: successful reconciliation, or a profile/desktop error.
 fn reconcile_locked(store: &Store, bridge: &dyn Bridge) -> Result<()> {
+    eprintln!("store={:?}, bridge={bridge:p}", store.root);
     for mut p in store.list()? {
         ensure(&p, bridge)?;
         if p["mode"] == "always" && p["hidden"] != true {
@@ -522,9 +641,13 @@ fn reconcile_locked(store: &Store, bridge: &dyn Bridge) -> Result<()> {
             let id = text(&p, "id").to_owned();
             store.write(&id, &p)?;
             result?;
+        } else if p["hidden"] != true {
+            bind_existing_tmux_windows(&p, bridge)?;
         }
     }
-    Ok(())
+    let result = Ok(());
+    eprintln!("{result:?}");
+    result
 }
 
 pub fn output(program: &str, args: &[&str]) -> Result<String> {
