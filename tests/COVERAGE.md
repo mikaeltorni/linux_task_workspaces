@@ -71,3 +71,18 @@ across common classes and custom TerminalEmulator desktop entries; task tmux,
 Chrome tabs and folder locations remain. Malformed CLI and invalid snapshot
 rejections immediately read the populated saved profile. General layout fixtures
 now use ordinary application windows; pid-zero Kitty inclusion was superseded.
+
+## Standalone tmux binding
+
+`standalone_tmux` runs with an empty home, system-only PATH and no TMUX or ACC
+monitor environment. `binds_without_acc` covers custom-socket capture/save,
+on-demand rebinding without launches/focus, always mode, repeated load, live pane
+PID reuse, malformed/missing-resource rejection reads and hide suspension.
+`restores_by_session` covers changed title/class/ID, unrelated same-title clients,
+additional attaches, missing-session recreation, idempotent reopening and legacy
+ACC/plain-terminal exclusions. `discovers_client_socket_label` covers client-only
+TMUX_TMPDIR and -L with preceding -f. Shared fixtures serialize environment
+changes and clean up their own server/client processes. The existing tmux_contract
+now obtains its terminal session from a real attached client rather than injecting
+session metadata into an unrelated PID-zero GUI window; structure/CWD/index and
+post-attach layout expectations remain verified.

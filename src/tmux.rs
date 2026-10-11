@@ -44,9 +44,103 @@ fn ancestor(mut pid: u32, parent: u32) -> bool {
     false
 }
 
+/// Discover socket options in a tmux client's raw argument vector.
+/// Parameters: argv - process arguments; root - client TMUX_TMPDIR; cwd - client working directory; uid - client owner.
+/// Returns: the explicitly selected socket path, if one was supplied.
+fn argument_socket(argv: &[String], root: &Path, cwd: &Path, uid: u32) -> Option<String> {
+    eprintln!("argv={argv:?}, root={root:?}, cwd={cwd:?}, uid={uid}");
+    let mut selected = None;
+    let mut args = argv.iter().skip(1);
+    while let Some(arg) = args.next() {
+        if ["-f", "-T", "-c"].contains(&arg.as_str()) {
+            args.next();
+            continue;
+        }
+        let option = if arg == "-S" || arg == "-L" {
+            args.next().map(|value| (&arg[..], &value[..]))
+        } else if let Some(value) = arg.strip_prefix("-S") {
+            Some(("-S", value))
+        } else {
+            arg.strip_prefix("-L").map(|value| ("-L", value))
+        };
+        if let Some((flag, value)) = option {
+            let socket = if flag == "-L" {
+                root.join(format!("tmux-{uid}")).join(value)
+            } else if Path::new(value).is_absolute() {
+                Path::new(value).to_path_buf()
+            } else {
+                cwd.join(value)
+            };
+            selected = Some(socket.to_string_lossy().into_owned());
+        }
+        if !arg.starts_with('-') {
+            break;
+        }
+    }
+    eprintln!("{selected:?}");
+    selected
+}
+
+/// Find sockets used by this terminal's own tmux client descendants.
+/// Parameters: pid - terminal process ancestor; uid - current user's identity.
+/// Returns: discovered client socket paths, independent of ACC and the caller's environment.
+fn descendant_sockets(pid: u32, uid: u32) -> Result<BTreeSet<String>> {
+    eprintln!("pid={pid}, uid={uid}");
+    let mut sockets = BTreeSet::new();
+    for entry in fs::read_dir("/proc")?.flatten() {
+        let Some(client) = entry
+            .file_name()
+            .to_str()
+            .and_then(|s| s.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        if !entry.metadata().is_ok_and(|m| m.uid() == uid)
+            || !fs::read_link(entry.path().join("exe"))
+                .is_ok_and(|p| p.file_name() == Some(std::ffi::OsStr::new("tmux")))
+            || !ancestor(client, pid)
+        {
+            continue;
+        }
+        let environment = fs::read(entry.path().join("environ")).unwrap_or_default();
+        let variable = |name: &str| {
+            environment
+                .split(|b| *b == 0)
+                .filter_map(|v| std::str::from_utf8(v).ok())
+                .find_map(|v| v.strip_prefix(name))
+        };
+        let root = Path::new(variable("TMUX_TMPDIR=").unwrap_or("/tmp"));
+        let cwd = fs::read_link(entry.path().join("cwd")).unwrap_or_else(|_| Path::new("/").into());
+        let argv: Vec<String> = fs::read(entry.path().join("cmdline"))
+            .unwrap_or_default()
+            .split(|b| *b == 0)
+            .filter(|b| !b.is_empty())
+            .map(|b| String::from_utf8_lossy(b).into_owned())
+            .collect();
+        if let Some(socket) = argument_socket(&argv, root, &cwd, uid) {
+            sockets.insert(socket);
+        }
+        if let Some(tmux) = variable("TMUX=") {
+            sockets.insert(tmux.split(',').next().unwrap_or("").into());
+        }
+    }
+    sockets.retain(|socket| {
+        fs::metadata(socket).is_ok_and(|m| m.file_type().is_socket() && m.uid() == uid)
+    });
+    let result = Ok(sockets);
+    eprintln!("{result:?}");
+    result
+}
+
+/// Capture sessions attached beneath a terminal, including explicitly selected sockets.
+/// Parameters: pid - terminal process ancestor; zero means no process is available.
+/// Returns: full snapshots of its attached tmux sessions, or a discovery error.
 pub fn attached_sessions(pid: u32) -> Result<Vec<Value>> {
+    eprintln!("pid={pid}");
     if pid == 0 {
-        return Ok(vec![]);
+        let result = Ok(vec![]);
+        eprintln!("{result:?}");
+        return result;
     }
     let uid = fs::metadata("/proc/self")?.uid();
     let mut sockets = BTreeSet::new();
@@ -63,6 +157,7 @@ pub fn attached_sessions(pid: u32) -> Result<Vec<Value>> {
     if let Ok(t) = std::env::var("TMUX") {
         sockets.insert(t.split(',').next().unwrap_or("").into());
     }
+    sockets.extend(descendant_sockets(pid, uid)?);
     let mut sessions = vec![];
     for socket in sockets {
         if let Ok(clients) = run(
@@ -85,7 +180,9 @@ pub fn attached_sessions(pid: u32) -> Result<Vec<Value>> {
             }
         }
     }
-    Ok(sessions)
+    let result = Ok(sessions);
+    eprintln!("{result:?}");
+    result
 }
 
 pub fn snapshot(socket: &str, name: &str) -> Result<Value> {
