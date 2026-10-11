@@ -119,8 +119,13 @@ Attach the desired tmux session in each terminal before capturing the task;
 its saved terminal windows will then reopen on that workspace after login.
 
 The `task-workspaces.service` reconciles permanent slots and `always` windows
-every 20 seconds without focusing them. `on-demand` windows open only when
-requested. Hide minimizes just saved windows and preserves running tmux jobs;
+every 20 seconds without focusing them. In both modes, existing terminals attached
+to a saved tmux session are moved back to its assigned workspace, including new
+clients opened elsewhere. Matching uses the local socket and exact session name,
+so changed titles, terminal classes or window IDs do not route an unrelated
+terminal into the task. `on-demand` opens missing applications only when
+requested; `always` also restores missing windows automatically. Hide minimizes
+just saved windows and preserves running tmux jobs;
 close asks those application windows to close, keeping detached tmux jobs alive.
 Either suspends automatic reopening until the next open action. `_dismiss ID`,
 `_startup`, and `_watch` are internal shortcut/service entrypoints.
@@ -130,15 +135,33 @@ private permissions; `TWS_CONFIG_HOME` overrides that directory. Window frames
 are saved relative to named monitor connectors and scaled if resolution changes.
 Disconnected monitors fall back to a visible monitor. Sticky windows are excluded.
 Tmux clients are linked to their terminal process; saved sessions record their
-socket, names, windows, panes, directories and layout. Running processes are not
+socket, names, windows, panes, directories and layout. Discovery includes default
+sockets, `tmux -S /path/to/socket`, and named `-L` sockets, including a client's
+own `TMUX_TMPDIR`; running `tws` outside tmux works too. Session discovery and
+workspace binding are implemented by standalone `tws` and its own service:
+ACC files, commands and services are not required. Running processes are not
 replayed after reboot. Tmux retains your running compression/upload jobs while
 you hide a workspace; after reboot, session structure and directories can be
 recreated, but commands such as `za` must be started again. Terminal windows
 that share one process may expose several attached sessions; those structures
 are saved, and the first session is attached when reopening that window.
 
-`save` captures every normal non-sticky window in the task's permanent slot,
-including Chrome/Chromium windows and attached tmux clients. Chrome tabs are
+`create`, a new-task configuration snapshot, and `save` exclude ordinary terminal
+windows without an attached local tmux client. Terminal detection uses common
+window/application classes, process executables, and installed desktop entries
+with the `TerminalEmulator` category. ACC Kitty classes (`kitty-acc-*`), ACC
+agent sessions (`acc-*`) and the `agent_command_center` monitor are excluded even
+when attached to tmux. An exported `AGENT_COMMAND_CENTER_TMUX_SESSION` also
+identifies a custom monitor name; it is optional. Load skips excluded terminal
+entries in older snapshots too. Ordinary Chrome/folder windows remain eligible.
+
+`save` captures eligible normal non-sticky windows in the task's assigned slot,
+including Chrome/Chromium windows and task tmux clients. To update an older task
+with these exclusions, arrange its windows and run `tws backups save`. Continue
+using `tws configure backups --workspace 3` to select its destination and
+`tws configure backups --mode always` for automatic missing-window restoration.
+Avoid assigning the same tmux session to tasks on different workspace slots;
+the session identity supplies the binding. Chrome tabs are
 read from its local SNSS v1/v3 session files, matched by current title and saved
 geometry, and reopened as separate windows with the same profile and tab URLs.
 There is no remote-debugging port or browser restart. Chrome can delay disk
@@ -162,6 +185,11 @@ No installer terminates or restarts your session.
 
 Checks: `cargo test --locked`, `cargo clippy --locked --all-targets -- -D warnings`,
 `cargo fmt --check`, and `node --test tests/*.test.mjs`. Tests isolate the desktop,
-tmux server and installation home.
+tmux server and installation home. Terminal checks use headless pseudo-terminals
+(`script` from util-linux), real isolated tmux clients, and simulated GNOME
+windows. Standalone checks use an empty home and system-only PATH with no ACC
+installation. See [tests/COVERAGE.md](tests/COVERAGE.md) for the saved cases.
+Capture/restoration diagnostics print parameters and results to stderr; CLI
+output, including `tws ID show` JSON, stays on stdout.
 
 MIT licensed; see [LICENSE](LICENSE).
