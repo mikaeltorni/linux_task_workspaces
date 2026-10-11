@@ -68,11 +68,17 @@ impl Bridge for Desktop {
             .push(json!({"binding":chord,"id":id,"role":role,"command":command}));
         Ok(())
     }
+    /// Supply non-terminal windows for general layout and CLI regressions.
+    /// Parameters: self - fake desktop with its static workspace count.
+    /// Returns: two ordinary application windows on the top monitor.
     fn snapshot(&self) -> Result<Value> {
-        Ok(json!({"active":2,"count":self.count,
+        eprintln!("self={self:p}");
+        let result = Ok(json!({"active":2,"count":self.count,
         "monitors":[{"index":0,"connector":"DP-1","x":0,"y":-1080,"width":1920,"height":1080}],
-        "windows":[{"id":"42","pid":0,"workspace":2,"app":"kitty.desktop","class":"kitty","title":"backups","monitor":"DP-1","rect":[0,-1080,960,1080]},
-                   {"id":"43","pid":0,"workspace":2,"app":"kitty.desktop","class":"kitty","title":"other","monitor":"DP-1","rect":[960,-1080,960,1080]}]}))
+        "windows":[{"id":"42","pid":0,"workspace":2,"app":"layout-test.desktop","class":"layout-test","title":"backups","monitor":"DP-1","rect":[0,-1080,960,1080]},
+                   {"id":"43","pid":0,"workspace":2,"app":"layout-test.desktop","class":"layout-test","title":"other","monitor":"DP-1","rect":[960,-1080,960,1080]}]}));
+        eprintln!("{result:?}");
+        result
     }
     fn action(&self, action: Value) -> Result<Value> {
         self.actions.borrow_mut().push(action);
