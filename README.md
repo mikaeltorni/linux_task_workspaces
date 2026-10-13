@@ -32,13 +32,25 @@ arrange the two Chrome windows on your top monitor, open your folder windows,
 and attach your tmux sessions in Kitty. Then run:
 
 ```sh
-tws create backups
-tws backups load        # moves the remembered windows into a new permanent slot
+tws configure backups --workspace 3  # persistent on a chosen existing/new slot
+tws backups load        # moves the remembered windows into workspace 3
 tws backups save        # capture its arranged windows, Chrome URLs and tmux state
-tws configure backups  # choose free open/close hotkeys and the startup mode
 ```
 
-Later, use your chosen open shortcut or `tws backups load`. After rearranging
+Numbered assignment defaults to `always`, clears any previous task shortcuts,
+and needs no hotkey. `tws configure backups` and both edit aliases ask only for
+the numbered destination when it is assigned. You can still explicitly override
+its mode with `--mode on-demand` or request a shortcut with `--open` / `--close`.
+
+For a task without an explicitly assigned workspace, run `tws configure backups`
+and keep `-` at the workspace question. A new task reserves an automatic slot;
+an existing task keeps its current slot. The wizard requires a free open hotkey,
+then asks for mode, an optional close hotkey and the close action. Switching from
+an assigned destination to automatic defaults to `on-demand`; reopening an already
+automatic task's wizard preserves its current mode and shortcuts. Invalid or
+cancelled configuration leaves the saved task and registered bindings unchanged.
+
+Later, use your configured open shortcut or `tws backups load`. After rearranging
 windows or changing tabs/folders, run `tws backups save` from any workspace;
 it saves the task's assigned slot. **Ctrl+Alt+Super+W** opens the configuration
 wizard. To edit an existing task, use `tws edit backups` or
@@ -55,11 +67,11 @@ tws create backups       # remember windows on the current workspace
 tws list
 tws backups show         # inspect the saved snapshot
 tws --help
-tws configure backups   # terminal wizard; creates a snapshot if needed
+tws configure backups   # choose numbered persistent destination, or - for shortcuts
 tws configure backups --open Super+B
 tws configure --launcher Control+Alt+Super+W
 tws configure backups --mode always     # keep windows available after login
-tws configure backups --workspace 3    # choose GNOME workspace 3 (numbered from 1)
+tws configure backups --workspace 3    # GNOME workspace 3, always mode, no task keys
 tws configure backups --mode on-demand  # open on its shortcut
 tws configure backups --close Ctrl+Super+B
 tws configure backups --close-action hide  # default; or close
@@ -82,12 +94,14 @@ and focuses its saved workspace. `_activate ID` is the internal hotkey handler.
 Installation assigns **Ctrl+Alt+Super+W** to this configuration wizard if free,
 preserving an existing launcher on reinstall. Use `TWS_CONFIG_HOTKEY=CHORD` to
 choose another install-time key or `TWS_CONFIG_HOTKEY=none` to skip registration.
-Task open/close shortcuts are assigned when you configure each task.
+The wizard assigns task shortcuts only when you choose an automatic destination.
+Numbered destinations do not prompt for them; the global configuration launcher
+remains separate from task open/close shortcuts.
 
 Every assigned shortcut is normalized and checked against GNOME settings,
 registered custom shortcuts, installed GNOME extension schemas, and other saved
-task bindings. A collision is rejected with its owner; existing bindings are
-never cleared. App-local shortcuts and hardcoded third-party input grabs are
+task bindings. A collision is rejected with its owner, preserving the colliding
+bindings. App-local shortcuts and hardcoded third-party input grabs are
 outside GNOME's settings registry. JSON edits use a private draft and validate
 before replacing the saved profile. `TWS_COMMAND=tasks bash install.sh` installs
 an additional `tasks` command; `tws` remains available for service compatibility.
@@ -102,7 +116,6 @@ Choose an existing or new numbered workspace in `tws configure backups` or
 
 ```sh
 tws configure backups --workspace 3
-tws configure backups --mode always
 tws backups load
 ```
 
@@ -112,11 +125,18 @@ current workspace's windows without allocating an extra slot, including when
 all 36 workspaces already exist. Existing destination names are preserved;
 unnamed destinations receive `Task: ID`. Tasks may share a workspace. Changing
 the assignment retains the saved windows, monitor layout, launch commands and
-tmux sessions; the previous static workspace remains available. `load` moves
+tmux sessions and defaults to persistent `always` mode without task shortcuts;
+the previous static workspace remains available. `load` moves
 the remembered windows to the chosen workspace immediately; `always` mode does
 so during automatic reconciliation. Later `save` captures the chosen workspace.
 Attach the desired tmux session in each terminal before capturing the task;
 its saved terminal windows will then reopen on that workspace after login.
+
+For an existing task such as `cli_task` that already remembers the `ppt` tmux
+session, use `tws configure cli_task --workspace 2`; it needs no further wizard
+or hotkey setup. `tws cli_task save` updates its layout on workspace 2, and
+`tws cli_task load` restores it manually when needed. Do not run `create` again
+to change the destination: that command reserves a new automatic slot.
 
 The `task-workspaces.service` reconciles permanent slots and `always` windows
 every 20 seconds without focusing them. In both modes, existing terminals attached
