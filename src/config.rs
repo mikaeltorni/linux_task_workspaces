@@ -5,7 +5,7 @@ use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::process::Command;
 
-/// Configure a persistent explicit destination without shortcut or mode prompts.
+/// Configure persistent explicit destinations or shortcuts for automatic task slots.
 /// Parameters: store - task storage; bridge - prompts and desktop actions; id - task identifier.
 /// Returns: configuration confirmation, or an error with the profile unchanged before persistence.
 pub fn wizard(store: &Store, bridge: &dyn Bridge, id: &str) -> Result<String> {
@@ -16,15 +16,17 @@ pub fn wizard(store: &Store, bridge: &dyn Bridge, id: &str) -> Result<String> {
     } else {
         crate::prepare_profile(store, bridge, id)?
     };
-    let default = (current["workspace"]
-        .as_u64()
-        .ok_or("Invalid workspace")?
-        .min(35)
-        + 1)
-    .to_string();
-    let number = bridge.prompt("GNOME workspace number (1–36)", &default)?;
-    let slot = workspace_number(&number)?;
-    assign_settings(&mut current, slot);
+    let default = if current["workspace_assigned"] == true {
+        (current["workspace"].as_u64().ok_or("Invalid workspace")? + 1).to_string()
+    } else {
+        "-".into()
+    };
+    let number = bridge.prompt("GNOME workspace (1–36; - for automatic slot)", &default)?;
+    let destination = workspace_choice(&number)?;
+    match destination {
+        Some(slot) => assign_settings(&mut current, slot),
+        None => automatic_settings(store, bridge, id, &mut current)?,
+    }
     let result = if exists {
         apply(store, bridge, id, current)
     } else {
@@ -32,6 +34,59 @@ pub fn wizard(store: &Store, bridge: &dyn Bridge, id: &str) -> Result<String> {
     };
     eprintln!("{result:?}");
     result
+}
+
+/// Parse a wizard destination before choosing its configuration operation.
+/// Parameters: number - prompt response, either a workspace number or automatic marker.
+/// Returns: parsed zero-based destination, None for automatic, or an invalid-number error.
+fn workspace_choice(number: &str) -> Result<Option<u64>> {
+    eprintln!("number={number}");
+    let result = if number.is_empty() || number == "-" {
+        Ok(None)
+    } else {
+        workspace_number(number).map(Some)
+    };
+    eprintln!("{result:?}");
+    result
+}
+
+/// Configure required open shortcuts and optional behavior for automatic task slots.
+/// Parameters: store - task storage; bridge - prompts and conflict checks; id - task identifier; profile - draft configuration.
+/// Returns: success with an updated draft, or rejection before saved state or bindings change.
+fn automatic_settings(
+    store: &Store,
+    bridge: &dyn Bridge,
+    id: &str,
+    profile: &mut Value,
+) -> Result<()> {
+    eprintln!(
+        "store={:?}, bridge={bridge:p}, id={id}, profile={profile}",
+        store.root
+    );
+    if profile["workspace_assigned"] == true {
+        profile["mode"] = json!("on-demand");
+    }
+    profile["workspace_assigned"] = json!(false);
+    let chord = bridge.prompt(
+        "Open hotkey (required, e.g. Super+B)",
+        text(profile, "open_hotkey"),
+    )?;
+    let open = check_hotkey(store, bridge, id, "open", &chord)?;
+    if open.is_empty() {
+        return Err("An automatic task workspace needs an open hotkey; choose a numbered workspace for persistent use without shortcuts".into());
+    }
+    profile["open_hotkey"] = json!(open);
+    let mode = bridge.prompt("Mode (always / on-demand)", text(profile, "mode"))?;
+    profile["mode"] = json!(mode);
+    let close = bridge.prompt(
+        "Hide/close hotkey (Ctrl+Super+B; - clears)",
+        text(profile, "close_hotkey"),
+    )?;
+    profile["close_hotkey"] = json!(close);
+    let action = bridge.prompt("Close action (hide / close)", text(profile, "close_action"))?;
+    profile["close_action"] = json!(action);
+    eprintln!("Ok(())");
+    Ok(())
 }
 
 /// Apply persistence and empty shortcuts to a chosen destination.

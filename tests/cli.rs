@@ -224,6 +224,133 @@ fn workspace_assignment_contract() {
 }
 
 #[test]
+/// Configure automatic task slots with required collision-checked open shortcuts.
+/// Parameters: none.
+/// Returns: None; verifies automatic allocation, editing, assignment and rejection state.
+fn automatic_workspace_hotkeys() {
+    eprintln!("parameters=none");
+    let temp = tempfile::tempdir().unwrap();
+    let store = Store {
+        root: temp.path().join("profiles"),
+    };
+    let desktop = Desktop::new();
+    call(&["configure", "ppt", "--workspace", "2"], &store, &desktop).unwrap();
+    *desktop.prompts.borrow_mut() = vec!["-", "Super+B", "on-demand", "Ctrl+Super+B", "hide"]
+        .into_iter()
+        .map(String::from)
+        .collect();
+    call(&["configure", "automatic"], &store, &desktop).unwrap();
+    let p: Value =
+        serde_json::from_str(&call(&["automatic", "show"], &store, &desktop).unwrap()).unwrap();
+    assert_eq!(p["workspace"], 8);
+    assert_eq!(p["workspace_assigned"], false);
+    assert_eq!(p["mode"], "on-demand");
+    assert_eq!(p["open_hotkey"], "<Super>b");
+    assert_eq!(p["close_hotkey"], "<Control><Super>b");
+    assert!(desktop.prompts.borrow().is_empty());
+    assert!(desktop
+        .actions
+        .borrow()
+        .iter()
+        .any(|a| a["op"] == "ensure" && a["workspace"] == 8));
+    desktop.actions.borrow_mut().clear();
+    *desktop.prompts.borrow_mut() = vec!["", "", "", "", ""]
+        .into_iter()
+        .map(String::from)
+        .collect();
+    call(&["automatic", "edit"], &store, &desktop).unwrap();
+    assert_eq!(desktop.actions.borrow()[0]["default"], "-");
+    let expected = call(&["automatic", "show"], &store, &desktop).unwrap();
+    let assigned = call(&["ppt", "show"], &store, &desktop).unwrap();
+    let list = call(&["list"], &store, &desktop).unwrap();
+    for (id, answers) in [
+        ("empty", vec!["-", "-"]),
+        ("collision", vec!["-", "Super+W"]),
+        ("duplicate", vec!["-", "Super+B"]),
+        ("invalid", vec!["-", "b"]),
+        ("cancelled", vec!["-"]),
+        ("cancelled", vec!["-", "Super+N"]),
+        ("invalid", vec!["bad"]),
+        ("automatic", vec!["-", "-"]),
+        ("automatic", vec!["-", "Super+W"]),
+        ("ppt", vec!["-", "-"]),
+        ("mode", vec!["-", "Super+N", "bad", "-", "hide"]),
+        (
+            "close",
+            vec!["-", "Super+N", "on-demand", "Super+N", "hide"],
+        ),
+    ] {
+        *desktop.prompts.borrow_mut() = answers.into_iter().map(String::from).collect();
+        let effects = desktop
+            .actions
+            .borrow()
+            .iter()
+            .filter(|a| a.get("prompt").is_none())
+            .count();
+        assert!(
+            call(&["configure", id], &store, &desktop).is_err(),
+            "accepted {id}"
+        );
+        assert_eq!(
+            call(&["automatic", "show"], &store, &desktop).unwrap(),
+            expected
+        );
+        assert_eq!(call(&["ppt", "show"], &store, &desktop).unwrap(), assigned);
+        assert_eq!(call(&["list"], &store, &desktop).unwrap(), list);
+        assert_eq!(
+            desktop
+                .actions
+                .borrow()
+                .iter()
+                .filter(|a| a.get("prompt").is_none())
+                .count(),
+            effects
+        );
+    }
+    *desktop.prompts.borrow_mut() = vec!["-", "Super+N", "on-demand", "-", "hide"]
+        .into_iter()
+        .map(String::from)
+        .collect();
+    call(&["configure", "ppt"], &store, &desktop).unwrap();
+    let p: Value =
+        serde_json::from_str(&call(&["ppt", "show"], &store, &desktop).unwrap()).unwrap();
+    assert_eq!(p["workspace"], 1);
+    assert_eq!(p["workspace_assigned"], false);
+    assert_eq!(p["mode"], "on-demand");
+    assert_eq!(p["open_hotkey"], "<Super>n");
+    *desktop.prompts.borrow_mut() = vec!["2".into()];
+    call(&["configure", "ppt"], &store, &desktop).unwrap();
+    let p: Value =
+        serde_json::from_str(&call(&["ppt", "show"], &store, &desktop).unwrap()).unwrap();
+    assert_eq!(p["workspace_assigned"], true);
+    assert_eq!(p["mode"], "always");
+    assert_eq!(p["open_hotkey"], "");
+    assert_eq!(p["close_hotkey"], "");
+    let expected = call(&["ppt", "show"], &store, &desktop).unwrap();
+    let automatic = call(&["automatic", "show"], &store, &desktop).unwrap();
+    let list = call(&["list"], &store, &desktop).unwrap();
+    let mut full = Desktop::new();
+    full.count = 36;
+    *full.prompts.borrow_mut() = vec!["-", "Super+N", "on-demand", "-", "hide"]
+        .into_iter()
+        .map(String::from)
+        .collect();
+    assert!(call(&["configure", "overflow"], &store, &full).is_err());
+    assert_eq!(call(&["ppt", "show"], &store, &full).unwrap(), expected);
+    assert_eq!(
+        call(&["automatic", "show"], &store, &full).unwrap(),
+        automatic
+    );
+    assert_eq!(call(&["list"], &store, &full).unwrap(), list);
+    assert!(!full
+        .actions
+        .borrow()
+        .iter()
+        .any(|a| a.get("binding").is_some() || a["op"] == "ensure"));
+    eprintln!("None");
+}
+
+#[test]
 /// Configure assigned destinations without asking for shortcuts.
 /// Parameters: none.
 /// Returns: None; asserts cleared bindings, remembered windows and rejection state.
