@@ -37,6 +37,13 @@ at their independent owners, rather than inferred from dispatch errors.
 
 ## Workspace assignment
 
+`assigned_workspace_without_hotkeys` seeds task open/close shortcuts, configures
+workspace 2 through the wizard, and verifies no hotkey prompt and both bindings
+cleared while saved windows survive. Malformed command/workspace input immediately
+reads the populated profile and public list. Assigned wizard rejection/cancellation
+coverage is retained in `workspace_assignment_new_and_wizard`; shortcut conflicts
+remain protected through the explicit shortcut interface in `conflict_contract`.
+
 `workspace_assignment_contract` assigns GNOME workspace 3 (stored index 2),
 preserves the other profile and remembered windows, and verifies `load` and
 always startup place every saved window at index 2 without startup focusing.

@@ -449,9 +449,13 @@ pub fn run(args: &[String], store: &Store, bridge: &dyn Bridge) -> Result<String
     dispatch(args, store, bridge)
 }
 
+/// Route supported CLI forms to their configuration or workspace owner.
+/// Parameters: args - CLI tokens; store - task profiles; bridge - desktop operations.
+/// Returns: formatted command output, or an input/domain error.
 fn dispatch(args: &[String], store: &Store, bridge: &dyn Bridge) -> Result<String> {
+    eprintln!("args={args:?}, store={:?}, bridge={bridge:p}", store.root);
     let a: Vec<&str> = args.iter().map(String::as_str).collect();
-    match a.as_slice() {
+    let result = match a.as_slice() {
         [] | ["--help"] | ["-h"] => Ok("tws create ID | list | ID show | ID save | ID load | ID hide | ID close\ntws configure [ID] [--open Super+B | --close Ctrl+Super+B | --mode always|on-demand | --close-action hide|close | --workspace NUMBER]\ntws configure --launcher Control+Alt+Super+W\ntws edit ID | ID edit [--json | --file PATH]\ntws conflicts HOTKEY\ntws configure ID --launch INDEX JSON_ARGV\nTWS_EDIT_ID=ID tws | TWS_LOAD_ID=ID tws\nRemember named GNOME task workspaces and tmux sessions.\n".into()),
         ["configure", "--launcher", chord] => {
             let normalized = config::check_hotkey(store,bridge,"configuration","launcher",chord)?;
@@ -463,24 +467,7 @@ fn dispatch(args: &[String], store: &Store, bridge: &dyn Bridge) -> Result<Strin
             let id = bridge.prompt("Workspace ID", "")?;
             dispatch(&["configure".into(),id], store, bridge)
         },
-        ["configure", id] => {
-            let exists = store.path(id)?.exists();
-            let mut current = if exists { store.read(id)? } else { prepare_profile(store,bridge,id)? };
-            let default = (current["workspace"].as_u64().ok_or("Invalid workspace")?.min(35)+1).to_string();
-            let number = bridge.prompt("GNOME workspace number (1–36)", &default)?;
-            let slot = config::workspace_number(&number)?;
-            if !exists || current["workspace"] != slot { current["workspace_assigned"] = json!(true); }
-            current["workspace"] = json!(slot);
-            let chord = bridge.prompt("Open hotkey (Super+B; - clears)",text(&current,"open_hotkey"))?;
-            current["open_hotkey"] = json!(chord);
-            let mode = bridge.prompt("Mode (always / on-demand)",text(&current,"mode"))?;
-            current["mode"] = json!(mode);
-            let close = bridge.prompt("Hide/close hotkey (Ctrl+Super+B; - clears)",text(&current,"close_hotkey"))?;
-            current["close_hotkey"] = json!(close);
-            let action = bridge.prompt("Close action (hide / close)",text(&current,"close_action"))?;
-            current["close_action"] = json!(action);
-            if exists { config::apply(store,bridge,id,current) } else { config::create(store,bridge,id,current) }
-        },
+        ["configure", id] => config::wizard(store,bridge,id),
         ["configure", id, "--workspace", number] => {
             let slot = config::workspace_number(number)?;
             let exists = store.path(id)?.exists();
@@ -587,7 +574,9 @@ fn dispatch(args: &[String], store: &Store, bridge: &dyn Bridge) -> Result<Strin
         },
         [id, "show"] => Ok(format!("{}\n", serde_json::to_string_pretty(&store.read(id)?)?)),
         _ => Err("Unknown command or invalid arguments; run tws --help.".into()),
-    }
+    };
+    eprintln!("{result:?}");
+    result
 }
 
 pub fn ensure(profile: &Value, bridge: &dyn Bridge) -> Result<()> {
