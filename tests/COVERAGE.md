@@ -49,6 +49,13 @@ to always with empty shortcuts, without mode/close-action prompts. Public startu
 places saved windows on workspace 2 without focusing. Explicit mode overrides
 still work, and range/mode rejection immediately reads the profile and task list.
 
+`automatic_workspace_hotkeys` chooses an automatic slot with a required free
+open shortcut and optional close shortcut; repeated wizard defaults retain its
+automatic slot and bindings. Empty/invalid/conflicting/duplicate shortcuts,
+cancelled questions, invalid mode, equal open/close bindings and exhausted slots
+leave both populated profiles, public list and desktop effects unchanged. Switching
+between automatic shortcuts and a persistent numbered destination is verified.
+
 `workspace_assignment_contract` assigns GNOME workspace 3 (stored index 2),
 preserves the other profile and remembered windows, and verifies `load` and
 always startup place every saved window at index 2 without startup focusing.
