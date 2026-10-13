@@ -44,6 +44,11 @@ reads the populated profile and public list. Assigned wizard rejection/cancellat
 coverage is retained in `workspace_assignment_new_and_wizard`; shortcut conflicts
 remain protected through the explicit shortcut interface in `conflict_contract`.
 
+`assigned_workspace_persistence` verifies direct and wizard assignment default
+to always with empty shortcuts, without mode/close-action prompts. Public startup
+places saved windows on workspace 2 without focusing. Explicit mode overrides
+still work, and range/mode rejection immediately reads the profile and task list.
+
 `workspace_assignment_contract` assigns GNOME workspace 3 (stored index 2),
 preserves the other profile and remembered windows, and verifies `load` and
 always startup place every saved window at index 2 without startup focusing.

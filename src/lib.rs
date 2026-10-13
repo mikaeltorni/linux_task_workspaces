@@ -470,11 +470,7 @@ fn dispatch(args: &[String], store: &Store, bridge: &dyn Bridge) -> Result<Strin
         ["configure", id] => config::wizard(store,bridge,id),
         ["configure", id, "--workspace", number] => {
             let slot = config::workspace_number(number)?;
-            let exists = store.path(id)?.exists();
-            let mut profile = if exists { store.read(id)? } else { prepare_profile(store,bridge,id)? };
-            profile["workspace"] = json!(slot);
-            profile["workspace_assigned"] = json!(true);
-            if exists { config::apply(store,bridge,id,profile) } else { config::create(store,bridge,id,profile) }
+            config::assign(store,bridge,id,slot)
         },
         ["configure", id, "--open", chord] => {
             let mut profile = store.read(id)?;
