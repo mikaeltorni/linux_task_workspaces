@@ -224,7 +224,75 @@ fn workspace_assignment_contract() {
 }
 
 #[test]
+/// Configure assigned destinations without asking for shortcuts.
+/// Parameters: none.
+/// Returns: None; asserts cleared bindings, remembered windows and rejection state.
+fn assigned_workspace_without_hotkeys() {
+    eprintln!("parameters=none");
+    let temp = tempfile::tempdir().unwrap();
+    let store = Store {
+        root: temp.path().join("profiles"),
+    };
+    let desktop = Desktop::new();
+    call(&["configure", "ppt", "--workspace", "2"], &store, &desktop).unwrap();
+    call(&["configure", "ppt", "--open", "Super+B"], &store, &desktop).unwrap();
+    call(
+        &["configure", "ppt", "--close", "Ctrl+Super+B"],
+        &store,
+        &desktop,
+    )
+    .unwrap();
+    desktop.actions.borrow_mut().clear();
+    *desktop.prompts.borrow_mut() = vec!["2", "on-demand", "hide"]
+        .into_iter()
+        .map(String::from)
+        .collect();
+    call(&["configure", "ppt"], &store, &desktop).unwrap();
+    let p: Value =
+        serde_json::from_str(&call(&["ppt", "show"], &store, &desktop).unwrap()).unwrap();
+    assert_eq!(p["workspace"], 1);
+    assert_eq!(p["workspace_assigned"], true);
+    assert_eq!(p["open_hotkey"], "");
+    assert_eq!(p["close_hotkey"], "");
+    assert_eq!(p["windows"].as_array().unwrap().len(), 2);
+    assert!(desktop.prompts.borrow().is_empty());
+    assert!(desktop
+        .actions
+        .borrow()
+        .iter()
+        .filter_map(|a| a["prompt"].as_str())
+        .all(|label| !label.contains("hotkey")));
+    assert!(desktop
+        .actions
+        .borrow()
+        .iter()
+        .filter(|a| a.get("binding").is_some())
+        .all(|a| a["binding"] == ""));
+    let expected = call(&["ppt", "show"], &store, &desktop).unwrap();
+    let list = call(&["list"], &store, &desktop).unwrap();
+    for args in [
+        vec!["configure", "ppt", "extra"],
+        vec!["configure", "ppt", "--workspace"],
+        vec!["configure", "ppt", "--workspace", "2", "extra"],
+        vec!["configure", "ppt", "--workspace", "bad"],
+    ] {
+        assert!(call(&args, &store, &desktop).is_err());
+        assert_eq!(call(&["ppt", "show"], &store, &desktop).unwrap(), expected);
+        assert_eq!(call(&["list"], &store, &desktop).unwrap(), list);
+    }
+    *desktop.prompts.borrow_mut() = vec!["bad".into()];
+    assert!(call(&["configure", "ppt"], &store, &desktop).is_err());
+    assert_eq!(call(&["ppt", "show"], &store, &desktop).unwrap(), expected);
+    assert_eq!(call(&["list"], &store, &desktop).unwrap(), list);
+    eprintln!("None");
+}
+
+#[test]
+/// Exercise explicit destination creation, editing and rejected wizard inputs.
+/// Parameters: none.
+/// Returns: None; verifies snapshots and desktop effects through public commands.
 fn workspace_assignment_new_and_wizard() {
+    eprintln!("parameters=none");
     let temp = tempfile::tempdir().unwrap();
     let store = Store {
         root: temp.path().join("profiles"),
@@ -262,7 +330,7 @@ fn workspace_assignment_new_and_wizard() {
         );
         assert_eq!(call(&["list"], &store, &desktop).unwrap(), list);
     }
-    *desktop.prompts.borrow_mut() = vec!["wizard", "3", "", "always", "", "hide"]
+    *desktop.prompts.borrow_mut() = vec!["wizard", "3", "always", "hide"]
         .into_iter()
         .map(String::from)
         .collect();
@@ -272,7 +340,7 @@ fn workspace_assignment_new_and_wizard() {
     assert_eq!(p["workspace"], 2);
     assert_eq!(p["mode"], "always");
     for args in [vec!["edit", "wizard"], vec!["wizard", "edit"]] {
-        *desktop.prompts.borrow_mut() = vec!["4", "", "on-demand", "", "hide"]
+        *desktop.prompts.borrow_mut() = vec!["4", "on-demand", "hide"]
             .into_iter()
             .map(String::from)
             .collect();
@@ -288,7 +356,7 @@ fn workspace_assignment_new_and_wizard() {
         .iter()
         .filter(|a| a.get("prompt").is_none())
         .count();
-    *desktop.prompts.borrow_mut() = vec!["5", "Super+W", "always", "", "hide"]
+    *desktop.prompts.borrow_mut() = vec!["5", "invalid", "hide"]
         .into_iter()
         .map(String::from)
         .collect();
@@ -339,6 +407,7 @@ fn workspace_assignment_new_and_wizard() {
             effects
         );
     }
+    eprintln!("None");
 }
 
 #[test]

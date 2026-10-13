@@ -5,6 +5,45 @@ use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::process::Command;
 
+/// Configure an explicit destination without setting up task shortcuts.
+/// Parameters: store - task storage; bridge - prompts and desktop actions; id - task identifier.
+/// Returns: configuration confirmation, or an error with the profile unchanged before persistence.
+pub fn wizard(store: &Store, bridge: &dyn Bridge, id: &str) -> Result<String> {
+    eprintln!("store={:?}, bridge={bridge:p}, id={id}", store.root);
+    let exists = store.path(id)?.exists();
+    let mut current = if exists {
+        store.read(id)?
+    } else {
+        crate::prepare_profile(store, bridge, id)?
+    };
+    let default = (current["workspace"]
+        .as_u64()
+        .ok_or("Invalid workspace")?
+        .min(35)
+        + 1)
+    .to_string();
+    let number = bridge.prompt("GNOME workspace number (1–36)", &default)?;
+    let slot = workspace_number(&number)?;
+    current["workspace_assigned"] = json!(true);
+    current["workspace"] = json!(slot);
+    current["open_hotkey"] = json!("");
+    current["close_hotkey"] = json!("");
+    let mode = bridge.prompt("Mode (always / on-demand)", text(&current, "mode"))?;
+    current["mode"] = json!(mode);
+    let action = bridge.prompt(
+        "Close action (hide / close)",
+        text(&current, "close_action"),
+    )?;
+    current["close_action"] = json!(action);
+    let result = if exists {
+        apply(store, bridge, id, current)
+    } else {
+        create(store, bridge, id, current)
+    };
+    eprintln!("{result:?}");
+    result
+}
+
 pub fn check_hotkey(
     store: &Store,
     bridge: &dyn Bridge,
