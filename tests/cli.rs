@@ -243,10 +243,7 @@ fn assigned_workspace_without_hotkeys() {
     )
     .unwrap();
     desktop.actions.borrow_mut().clear();
-    *desktop.prompts.borrow_mut() = vec!["2", "on-demand", "hide"]
-        .into_iter()
-        .map(String::from)
-        .collect();
+    *desktop.prompts.borrow_mut() = vec!["2"].into_iter().map(String::from).collect();
     call(&["configure", "ppt"], &store, &desktop).unwrap();
     let p: Value =
         serde_json::from_str(&call(&["ppt", "show"], &store, &desktop).unwrap()).unwrap();
@@ -284,6 +281,70 @@ fn assigned_workspace_without_hotkeys() {
     assert!(call(&["configure", "ppt"], &store, &desktop).is_err());
     assert_eq!(call(&["ppt", "show"], &store, &desktop).unwrap(), expected);
     assert_eq!(call(&["list"], &store, &desktop).unwrap(), list);
+    eprintln!("None");
+}
+
+#[test]
+/// Assign tasks with persistent defaults and no further wizard questions.
+/// Parameters: none.
+/// Returns: None; asserts startup placement, explicit mode override and rejection state.
+fn assigned_workspace_persistence() {
+    eprintln!("parameters=none");
+    let temp = tempfile::tempdir().unwrap();
+    let store = Store {
+        root: temp.path().join("profiles"),
+    };
+    let desktop = Desktop::new();
+    call(&["configure", "ppt", "--workspace", "2"], &store, &desktop).unwrap();
+    let p: Value =
+        serde_json::from_str(&call(&["ppt", "show"], &store, &desktop).unwrap()).unwrap();
+    assert_eq!(p["workspace"], 1);
+    assert_eq!(p["mode"], "always");
+    assert_eq!(p["open_hotkey"], "");
+    assert_eq!(p["close_hotkey"], "");
+    call(
+        &["configure", "ppt", "--mode", "on-demand"],
+        &store,
+        &desktop,
+    )
+    .unwrap();
+    let overridden: Value =
+        serde_json::from_str(&call(&["ppt", "show"], &store, &desktop).unwrap()).unwrap();
+    assert_eq!(overridden["mode"], "on-demand");
+    desktop.actions.borrow_mut().clear();
+    *desktop.prompts.borrow_mut() = vec!["2".into()];
+    call(&["edit", "ppt"], &store, &desktop).unwrap();
+    let expected = call(&["ppt", "show"], &store, &desktop).unwrap();
+    let p: Value = serde_json::from_str(&expected).unwrap();
+    assert_eq!(p["mode"], "always");
+    assert_eq!(
+        desktop
+            .actions
+            .borrow()
+            .iter()
+            .filter(|a| a.get("prompt").is_some())
+            .count(),
+        1
+    );
+    assert!(desktop.prompts.borrow().is_empty());
+    desktop.actions.borrow_mut().clear();
+    call(&["_startup"], &store, &desktop).unwrap();
+    assert!(desktop
+        .actions
+        .borrow()
+        .iter()
+        .any(|a| a["op"] == "place" && a["workspace"] == 1));
+    assert!(!desktop.actions.borrow().iter().any(|a| a["op"] == "focus"));
+    let list = call(&["list"], &store, &desktop).unwrap();
+    for args in [
+        vec!["configure", "ppt", "--workspace", "0"],
+        vec!["configure", "ppt", "--workspace", "37"],
+        vec!["configure", "ppt", "--mode", "bad"],
+    ] {
+        assert!(call(&args, &store, &desktop).is_err());
+        assert_eq!(call(&["ppt", "show"], &store, &desktop).unwrap(), expected);
+        assert_eq!(call(&["list"], &store, &desktop).unwrap(), list);
+    }
     eprintln!("None");
 }
 
@@ -330,20 +391,14 @@ fn workspace_assignment_new_and_wizard() {
         );
         assert_eq!(call(&["list"], &store, &desktop).unwrap(), list);
     }
-    *desktop.prompts.borrow_mut() = vec!["wizard", "3", "always", "hide"]
-        .into_iter()
-        .map(String::from)
-        .collect();
+    *desktop.prompts.borrow_mut() = vec!["wizard", "3"].into_iter().map(String::from).collect();
     call(&["configure"], &store, &desktop).unwrap();
     let p: Value =
         serde_json::from_str(&call(&["wizard", "show"], &store, &desktop).unwrap()).unwrap();
     assert_eq!(p["workspace"], 2);
     assert_eq!(p["mode"], "always");
     for args in [vec!["edit", "wizard"], vec!["wizard", "edit"]] {
-        *desktop.prompts.borrow_mut() = vec!["4", "on-demand", "hide"]
-            .into_iter()
-            .map(String::from)
-            .collect();
+        *desktop.prompts.borrow_mut() = vec!["4"].into_iter().map(String::from).collect();
         call(&args, &store, &desktop).unwrap();
         let p: Value =
             serde_json::from_str(&call(&["wizard", "show"], &store, &desktop).unwrap()).unwrap();
@@ -356,11 +411,12 @@ fn workspace_assignment_new_and_wizard() {
         .iter()
         .filter(|a| a.get("prompt").is_none())
         .count();
-    *desktop.prompts.borrow_mut() = vec!["5", "invalid", "hide"]
-        .into_iter()
-        .map(String::from)
-        .collect();
-    assert!(call(&["configure", "collision"], &store, &desktop).is_err());
+    assert!(call(
+        &["configure", "backup", "--mode", "invalid"],
+        &store,
+        &desktop
+    )
+    .is_err());
     assert_eq!(call(&["list"], &store, &desktop).unwrap(), list);
     assert_eq!(
         call(&["backup", "show"], &store, &desktop).unwrap(),
@@ -377,8 +433,8 @@ fn workspace_assignment_new_and_wizard() {
     );
     let wizard = call(&["wizard", "show"], &store, &desktop).unwrap();
     for (id, responses) in [
-        ("cancelled", vec!["5"]),
-        ("wizard", vec!["5"]),
+        ("cancelled", vec![]),
+        ("wizard", vec![]),
         ("invalid", vec!["bad"]),
         ("invalid", vec!["0"]),
         ("invalid", vec!["37"]),

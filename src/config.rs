@@ -5,7 +5,7 @@ use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::process::Command;
 
-/// Configure an explicit destination without setting up task shortcuts.
+/// Configure a persistent explicit destination without shortcut or mode prompts.
 /// Parameters: store - task storage; bridge - prompts and desktop actions; id - task identifier.
 /// Returns: configuration confirmation, or an error with the profile unchanged before persistence.
 pub fn wizard(store: &Store, bridge: &dyn Bridge, id: &str) -> Result<String> {
@@ -24,21 +24,48 @@ pub fn wizard(store: &Store, bridge: &dyn Bridge, id: &str) -> Result<String> {
     .to_string();
     let number = bridge.prompt("GNOME workspace number (1–36)", &default)?;
     let slot = workspace_number(&number)?;
-    current["workspace_assigned"] = json!(true);
-    current["workspace"] = json!(slot);
-    current["open_hotkey"] = json!("");
-    current["close_hotkey"] = json!("");
-    let mode = bridge.prompt("Mode (always / on-demand)", text(&current, "mode"))?;
-    current["mode"] = json!(mode);
-    let action = bridge.prompt(
-        "Close action (hide / close)",
-        text(&current, "close_action"),
-    )?;
-    current["close_action"] = json!(action);
+    assign_settings(&mut current, slot);
     let result = if exists {
         apply(store, bridge, id, current)
     } else {
         create(store, bridge, id, current)
+    };
+    eprintln!("{result:?}");
+    result
+}
+
+/// Apply persistence and empty shortcuts to a chosen destination.
+/// Parameters: profile - mutable saved task; slot - parsed zero-based workspace.
+/// Returns: None; updates workspace assignment and default mode in place.
+fn assign_settings(profile: &mut Value, slot: u64) {
+    eprintln!("profile={profile}, slot={slot}");
+    profile["workspace"] = json!(slot);
+    profile["workspace_assigned"] = json!(true);
+    profile["mode"] = json!("always");
+    profile["open_hotkey"] = json!("");
+    profile["close_hotkey"] = json!("");
+    eprintln!("None");
+}
+
+/// Create or update a persistent task on an explicitly chosen workspace.
+/// Parameters: store - task storage; bridge - desktop operations; id - task identifier; slot - parsed zero-based workspace.
+/// Returns: configuration confirmation, or a profile/desktop error.
+pub fn assign(store: &Store, bridge: &dyn Bridge, id: &str, slot: u64) -> Result<String> {
+    eprintln!(
+        "store={:?}, bridge={bridge:p}, id={id}, slot={slot}",
+        store.root
+    );
+    let exists = store.path(id)?.exists();
+    let mut profile = if exists {
+        store.read(id)?
+    } else {
+        crate::prepare_profile(store, bridge, id)?
+    };
+    assign_settings(&mut profile, slot);
+    let result = if exists {
+        apply(store, bridge, id, profile)
+    } else {
+        create(store, bridge, id, profile)
     };
     eprintln!("{result:?}");
     result
