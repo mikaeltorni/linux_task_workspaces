@@ -1,7 +1,10 @@
 pub mod chrome;
 pub mod config;
+pub mod continuity;
 pub mod folders;
+mod harbor;
 pub mod hotkeys;
+pub mod runtime;
 mod session_environment;
 pub mod terminals;
 pub mod tmux;
@@ -467,9 +470,23 @@ pub fn run(args: &[String], store: &Store, bridge: &dyn Bridge) -> Result<String
 /// Returns: formatted command output, or an input/domain error.
 fn dispatch(args: &[String], store: &Store, bridge: &dyn Bridge) -> Result<String> {
     eprintln!("args={args:?}, store={:?}, bridge={bridge:p}", store.root);
+    if let Some(command) = continuity::parse_checkpoint(args)? {
+        let result = match command {
+            continuity::CheckpointCommand::All => {
+                continuity::all(store)?;
+                Ok("Tmux checkpoints saved\n".into())
+            }
+            continuity::CheckpointCommand::Task(id) => {
+                continuity::checkpoint(store, &store.read(&id)?)?;
+                Ok(format!("Checkpointed {id}\n"))
+            }
+        };
+        eprintln!("{result:?}");
+        return result;
+    }
     let a: Vec<&str> = args.iter().map(String::as_str).collect();
     let result = match a.as_slice() {
-        [] | ["--help"] | ["-h"] => Ok("tws create ID | list | ID show | ID save | ID load | ID hide | ID close\ntws configure [ID] [--open Super+B | --close Ctrl+Super+B | --mode always|on-demand | --close-action hide|close | --workspace NUMBER]\ntws configure --launcher Control+Alt+Super+W\ntws edit ID | ID edit [--json | --file PATH]\ntws conflicts HOTKEY\ntws configure ID --launch INDEX JSON_ARGV\nTWS_EDIT_ID=ID tws | TWS_LOAD_ID=ID tws\nRemember named GNOME task workspaces and tmux sessions.\n".into()),
+        [] | ["--help"] | ["-h"] => Ok("tws create ID | list | ID show | ID save | ID checkpoint | ID load | ID hide | ID close\ntws configure [ID] [--open Super+B | --close Ctrl+Super+B | --mode always|on-demand | --close-action hide|close | --workspace NUMBER]\ntws configure --launcher Control+Alt+Super+W\ntws edit ID | ID edit [--json | --file PATH]\ntws conflicts HOTKEY\ntws configure ID --launch INDEX JSON_ARGV\nTWS_EDIT_ID=ID tws | TWS_LOAD_ID=ID tws\nRemember named GNOME task workspaces and tmux sessions.\n".into()),
         ["configure", "--launcher", chord] => {
             let normalized = config::check_hotkey(store,bridge,"configuration","launcher",chord)?;
             let command = hotkeys::terminal(&[hotkeys::executable().to_string_lossy().into_owned(),"configure".into()]);
@@ -496,12 +513,14 @@ fn dispatch(args: &[String], store: &Store, bridge: &dyn Bridge) -> Result<Strin
         ["_activate", id] | [id,"load"] => {
             let mut profile = store.read(id)?;
             config::validate(&profile,id)?;
+            continuity::overlay(store,&mut profile,true)?;
             ensure(&profile,bridge)?;
             let result = restore_windows(&mut profile,bridge,true);
             if result.is_err() {store.write(id,&profile)?;}
             let ids=result?;
             profile["hidden"] = json!(false);
             store.write(id,&profile)?;
+            continuity::checkpoint(store,&profile)?;
             Ok(format!("Opened {id}: {} windows\n",ids.len()))
         },
         ["configure", id, "--mode", mode] => {
@@ -569,6 +588,7 @@ fn dispatch(args: &[String], store: &Store, bridge: &dyn Bridge) -> Result<Strin
             }
             profile["windows"]=captured["windows"].clone();profile["monitors"]=captured["monitors"].clone();
             store.write(id,&profile)?;
+            continuity::checkpoint(store,&profile)?;
             Ok(format!("Saved {id}: {} windows\n",profile["windows"].as_array().unwrap().len()))
         },
         ["list"] => Ok(store.list()?.iter().map(|p| format!("{}\tworkspace {}\t{} windows\n",
@@ -627,12 +647,13 @@ pub fn reconcile(store: &Store, bridge: &dyn Bridge) -> Result<()> {
     reconcile_locked(store, bridge)
 }
 
-/// Reconcile permanent slots, existing tmux bindings and always-mode windows.
+/// Reconcile permanent slots, tmux bindings and windows, then checkpoint live sessions.
 /// Parameters: store - locked task profile store; bridge - current desktop operations.
-/// Returns: successful reconciliation, or a profile/desktop error.
+/// Returns: successful reconciliation and checkpointing, or a profile, storage or desktop error.
 fn reconcile_locked(store: &Store, bridge: &dyn Bridge) -> Result<()> {
     eprintln!("store={:?}, bridge={bridge:p}", store.root);
     for mut p in store.list()? {
+        continuity::overlay(store, &mut p, true)?;
         ensure(&p, bridge)?;
         if p["mode"] == "always" && p["hidden"] != true {
             let result = restore_windows(&mut p, bridge, false);
@@ -642,6 +663,7 @@ fn reconcile_locked(store: &Store, bridge: &dyn Bridge) -> Result<()> {
         } else if p["hidden"] != true {
             bind_existing_tmux_windows(&p, bridge)?;
         }
+        continuity::checkpoint(store, &p)?;
     }
     let result = Ok(());
     eprintln!("{result:?}");
