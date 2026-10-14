@@ -1,7 +1,7 @@
 # Linux Task Workspaces
 
-Rust CLI for named GNOME workspace window layouts, monitor positions, and attached
-tmux sessions. Standalone, user-owned installation for Ubuntu/GNOME 45–48.
+Rust CLI for named GNOME workspace window layouts, monitor positions, and durable
+tmux sessions with saved pane output. Standalone, user-owned installation for Ubuntu/GNOME 45–48.
 
 ## Disclaimer
 
@@ -84,6 +84,7 @@ tws backups edit --file /path/to/profile.json
 TWS_EDIT_ID=backups tws
 tws configure backups --launch 0 '["nautilus","--new-window","/home/mk/My Backups"]'
 tws backups save          # replace snapshot from the task's permanent workspace
+tws backups checkpoint    # save current tmux state without rearranging GUI windows
 tws backups load          # open or reuse windows and restore monitor placement
 TWS_LOAD_ID=backups tws
 ```
@@ -176,12 +177,81 @@ socket, names, windows, panes, directories and layout. Discovery includes defaul
 sockets, `tmux -S /path/to/socket`, and named `-L` sockets, including a client's
 own `TMUX_TMPDIR`; running `tws` outside tmux works too. Session discovery and
 workspace binding are implemented by standalone `tws` and its own service:
-ACC files, commands and services are not required. Running processes are not
-replayed after reboot. Tmux retains your running compression/upload jobs while
-you hide a workspace; after reboot, session structure and directories can be
-recreated, but commands such as `za` must be started again. Terminal windows
+ACC files, commands and services are not required. Tmux retains running jobs while
+you hide a workspace. After reboot, saved sessions recover their current layout,
+directories and pane output, with supported Harbor jobs resumed from application
+state as described below. Commands such as `za` must be started again. Terminal windows
 that share one process may expose several attached sessions; those structures
 are saved, and the first session is attached when reopening that window.
+
+## Tmux continuity after reboot
+
+The watcher checkpoints managed tmux sessions every 20 seconds. `save` and
+`tws ID checkpoint` also checkpoint them; the latter leaves the saved GUI layout
+alone. Current tmux window indices, names, layouts, active panes and directories
+are saved independently of the older manual window snapshot. Hidden/on-demand
+tasks keep recording their existing sessions without reopening their windows.
+Missing sessions do not overwrite their last usable checkpoint with empty state.
+
+Once checkpointing starts, pane output streams to private files and synchronizes
+each received chunk. Recovery displays the captured tmux history followed by
+output recorded after that capture. Displayed text is never submitted as shell
+input. There can be slight overlap at the capture boundary. Live sessions keep
+their existing processes; a single fresh idle shell created before restoration
+can be recovered when its server generation differs from the saved checkpoint.
+Active jobs and user-owned `pipe-pane` collectors are preserved; a foreign collector
+causes an explicit checkpoint error rather than being replaced.
+
+Private state lives under `TWS_CONFIG_HOME/.continuity/ID/` (or the default task
+config directory). `checkpoint.json` is atomic and synchronized; a validated
+`checkpoint.previous.json` supplies fallback if the current manifest is damaged.
+If both are unusable, restoration reports the error and preserves the evidence.
+Four recent snapshot generations and any generations referenced by the two
+manifests are retained. Output streams remain saved, so disk use grows with
+terminal output. Keep this directory with the profiles when backing them up.
+
+The service runs `_checkpoint-all` on stop without needing the GNOME bridge.
+`KillMode=process` keeps a service restart from terminating tmux and terminal
+children. The native internal forms `_record-pane FILE` and
+`_restore-pane DESCRIPTOR` implement output recording and cold pane restoration;
+they are created by `tws`, not required for normal setup. `TWS_RECORDER_BINARY`
+can override the executable used for those detached helpers; normally they use
+the current `tws` executable. After an offline installation, activate the unit:
+
+```sh
+systemctl --user daemon-reload
+systemctl --user enable task-workspaces.service
+systemctl --user restart task-workspaces.service
+```
+
+For the `ppt` task on workspace 2, the normal commands are:
+
+```sh
+tws cli_task checkpoint
+tws cli_task load
+```
+
+Harbor descendants launched as `harbor run --job-name NAME --jobs-dir DIRECTORY`
+(`-o` also works; the default is `jobs`) or `harbor jobs resume --job-path DIRECTORY`
+(`-p` also works) are recognized when their durable `config.json` exists. After
+server loss, `tws` invokes `harbor jobs resume` with the saved plugin names and
+`PYTHONPATH`, retaining completed trials and retrying cancelled/unfinished work
+according to Harbor's own resume rules. Reopening a live session does not resume
+the same job again. If Harbor has redacted a trial's mount source, its original
+job configuration restores that reference only when the match is unambiguous;
+the trial's original config is saved as `config.tws-before-resume.json` first.
+The Codex credential-file path is recovered from that job's existing mount
+configuration. Other credential environment variables, valid credentials,
+Harbor, its plugins and writable job artifacts must remain available. A resume
+failure is shown in the restored pane and leaves its job artifacts intact.
+
+Reboot ends processes and their in-memory state. Continuity restores durable
+terminal/application state; it does not preserve arbitrary running processes.
+Only output received by the recorder and synchronized files can survive power
+loss. Layout changes since the last checkpoint, unavailable credentials, disk
+failures, and output from before recording was enabled cannot be guaranteed.
+Restoration is tested through isolated tmux server loss; tests never reboot the
+desktop or run paid Harbor jobs.
 
 `create`, a new-task configuration snapshot, and `save` exclude ordinary terminal
 windows without an attached local tmux client. Terminal detection uses common
