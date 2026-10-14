@@ -91,6 +91,17 @@ Chrome tabs and folder locations remain. Malformed CLI and invalid snapshot
 rejections immediately read the populated saved profile. General layout fixtures
 now use ordinary application windows; pid-zero Kitty inclusion was superseded.
 
+## Early-login display environment
+
+`startup_environment` runs the public `_startup` route with a populated always
+task, fake GNOME placement and a real headless child process. An isolated D-Bus
+manager supplies fresh display variables that are absent from the service-like
+child's inherited environment. It covers X11 authentication paths with spaces
+and equals signs, Wayland variables imported after the first attempt in the same
+process, explicit DISPLAY/XAUTHORITY overrides, empty inherited values, and a
+missing systemd manager. Unrelated manager variables are excluded. Invalid startup
+shape immediately reads the successfully seeded profile. No real GUI is launched.
+
 ## Standalone tmux binding
 
 `standalone_tmux` runs with an empty home, system-only PATH and no TMUX or ACC

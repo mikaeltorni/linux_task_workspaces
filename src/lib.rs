@@ -2,6 +2,7 @@ pub mod chrome;
 pub mod config;
 pub mod folders;
 pub mod hotkeys;
+mod session_environment;
 pub mod terminals;
 pub mod tmux;
 
@@ -27,8 +28,14 @@ pub trait Bridge {
     fn conflicts(&self, chord: &str, id: &str, role: &str) -> Result<Vec<String>> {
         hotkeys::conflicts(chord, id, role)
     }
+    /// Launch an application with missing display variables refreshed per child.
+    /// Parameters: self - desktop bridge; argv - executable and literal arguments.
+    /// Returns: successful process creation, or a launch error.
     fn launch(&self, argv: &[String]) -> Result<()> {
-        spawn(argv)
+        eprintln!("self={self:p}, argv={argv:?}");
+        let result = spawn(argv);
+        eprintln!("{result:?}");
+        result
     }
 }
 
@@ -217,14 +224,20 @@ pub fn text<'a>(v: &'a Value, key: &str) -> &'a str {
     v[key].as_str().unwrap_or("")
 }
 
+/// Launch saved argv with fresh missing desktop variables for early-login services.
+/// Parameters: argv - application executable and literal arguments.
+/// Returns: successful child spawn, or an empty-command/process error.
 pub fn spawn(argv: &[String]) -> Result<()> {
+    eprintln!("argv={argv:?}");
     let (program, args) = argv.split_first().ok_or("Empty launch command")?;
     Command::new(program)
         .args(args)
+        .envs(session_environment::missing())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::inherit())
         .spawn()?;
+    eprintln!("Ok(())");
     Ok(())
 }
 
