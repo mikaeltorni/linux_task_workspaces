@@ -150,6 +150,23 @@ close asks those application windows to close, keeping detached tmux jobs alive.
 Either suspends automatic reopening until the next open action. `_dismiss ID`,
 `_startup`, and `_watch` are internal shortcut/service entrypoints.
 
+After login, the watcher can start before GNOME's bridge or display environment
+is ready. It retries reconciliation as the session becomes available. Before
+launching an application, `tws` fetches the current systemd user manager's desktop
+environment and fills missing/empty `DISPLAY`, `WAYLAND_DISPLAY`, `XAUTHORITY`,
+`XDG_RUNTIME_DIR` and `XDG_SESSION_TYPE` values for that child only. This also
+works when the watcher started before GNOME imported those values; no service
+restart is needed for that timing case. Explicit nonempty environment values
+are preserved, and unrelated manager variables are not copied. Without a user
+manager, applications continue to inherit the invoking terminal's environment.
+Application launch errors remain on stderr and are visible in the service journal.
+To inspect a login restoration failure, use:
+
+```sh
+systemctl --user status task-workspaces.service --no-pager
+journalctl --user -u task-workspaces.service -b --no-pager
+```
+
 Snapshots live in `${XDG_CONFIG_HOME:-~/.config}/task-workspaces/ID.json` with
 private permissions; `TWS_CONFIG_HOME` overrides that directory. Window frames
 are saved relative to named monitor connectors and scaled if resolution changes.
@@ -209,6 +226,9 @@ tmux server and installation home. Terminal checks use headless pseudo-terminals
 (`script` from util-linux), real isolated tmux clients, and simulated GNOME
 windows. Standalone checks use an empty home and system-only PATH with no ACC
 installation. See [tests/COVERAGE.md](tests/COVERAGE.md) for the saved cases.
+Startup-environment checks use private D-Bus managers and headless application
+probes, including display values imported after an initial attempt in the same
+watcher-like process. They never open GUI windows or reboot the machine.
 Capture/restoration diagnostics print parameters and results to stderr; CLI
 output, including `tws ID show` JSON, stays on stdout.
 
