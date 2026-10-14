@@ -17,6 +17,7 @@ pub(super) struct Fixture {
     previous_home: Option<OsString>,
     previous_path: Option<OsString>,
     previous_monitor: Option<OsString>,
+    previous_recorder: Option<OsString>,
     _guard: std::sync::MutexGuard<'static, ()>,
     pub(super) state: RefCell<Value>,
     pub(super) actions: RefCell<Vec<Value>>,
@@ -46,11 +47,13 @@ impl Fixture {
             previous_home: std::env::var_os("HOME"),
             previous_path: std::env::var_os("PATH"),
             previous_monitor: std::env::var_os("AGENT_COMMAND_CENTER_TMUX_SESSION"),
+            previous_recorder: std::env::var_os("TWS_RECORDER_BINARY"),
             _guard: guard,
             state: RefCell::new(json!({"active":2,"count":8,"windows":[],
                 "monitors":[{"connector":"DP-1","width":1920,"height":1080,"x":0,"y":0}]})),
             actions: RefCell::new(vec![]),
         };
+        std::env::set_var("TWS_RECORDER_BINARY", env!("CARGO_BIN_EXE_tws"));
         for name in ["backups", "acc-ca-test", "agent_command_center"] {
             fixture.tmux(&["new-session", "-d", "-s", name]);
             let client = Command::new("script")
@@ -156,12 +159,24 @@ impl Fixture {
     /// Returns: the command's UTF-8 standard output.
     pub(super) fn tmux(&self, args: &[&str]) -> String {
         eprintln!("self={self:?}, args={args:?}");
-        let output = Command::new("tmux")
-            .args(["-S", &self.socket, "-f", "/dev/null"])
-            .args(args)
-            .env_remove("TMUX")
-            .output()
-            .unwrap();
+        let mut attempts = 0;
+        let output = loop {
+            let output = Command::new("tmux")
+                .args(["-S", &self.socket, "-f", "/dev/null"])
+                .args(args)
+                .env_remove("TMUX")
+                .output()
+                .unwrap();
+            if args.first() == Some(&"new-session")
+                && String::from_utf8_lossy(&output.stderr).contains("server exited unexpectedly")
+                && attempts < 3
+            {
+                attempts += 1;
+                std::thread::sleep(Duration::from_millis(50));
+            } else {
+                break output;
+            }
+        };
         assert!(
             output.status.success(),
             "{}",
@@ -200,6 +215,7 @@ impl Drop for Fixture {
             ("HOME", &self.previous_home),
             ("PATH", &self.previous_path),
             ("AGENT_COMMAND_CENTER_TMUX_SESSION", &self.previous_monitor),
+            ("TWS_RECORDER_BINARY", &self.previous_recorder),
         ] {
             if let Some(value) = previous {
                 std::env::set_var(key, value);

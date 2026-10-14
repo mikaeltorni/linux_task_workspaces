@@ -116,3 +116,22 @@ changes and clean up their own server/client processes. The existing tmux_contra
 now obtains its terminal session from a real attached client rather than injecting
 session metadata into an unrelated PID-zero GUI window; structure/CWD/index and
 post-attach layout expectations remain verified.
+
+## Durable tmux continuity
+
+`cargo test --locked --offline --test continuity` collects seven public-interface
+checks with real isolated tmux servers and a mocked desktop. The saved baseline
+had six failures on missing checkpoint/recorder/shutdown behavior; foreign-pipe
+rejection already failed safely through unknown-command rejection.
+
+Coverage includes manual and shutdown checkpoints, layouts and window indices,
+current directories, history and output emitted after the last checkpoint,
+restoration after owned server loss, idempotent live-session reuse, bounded
+snapshot duplication, prior-good fallback and rejection of two broken manifests,
+precreated empty-shell recovery and preservation of active jobs, malformed
+runtime arguments with public profile reads after rejection, private recorder
+permissions, foreign pipe preservation, and offline installed service behavior.
+Fake Harbor resumes exactly once from durable job state. Its saved mount-redaction
+regression failed before repair and verifies the original trial config is backed
+up before restoration of a mount reference from the original job configuration.
+Tests never execute paid Harbor jobs, open GUI windows, or reboot the machine.

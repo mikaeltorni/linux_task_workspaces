@@ -6,26 +6,51 @@ use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::Path;
 use std::process::Command;
 
-fn run(socket: &str, args: &[&str]) -> Result<String> {
-    let p = Command::new("tmux")
-        .args(["-S", socket])
-        .args(args)
-        .output()?;
+/// Execute a tmux control command on an explicit socket.
+/// Parameters: socket - server path; args - literal control operands.
+/// Returns: command stdout or the tmux error.
+pub(crate) fn run(socket: &str, args: &[&str]) -> Result<String> {
+    eprintln!("socket={socket}, args={args:?}");
+    let mut attempts = 0;
+    let p = loop {
+        let output = Command::new("tmux")
+            .args(["-S", socket])
+            .args(args)
+            .output()?;
+        if args.first() == Some(&"new-session")
+            && String::from_utf8_lossy(&output.stderr).contains("server exited unexpectedly")
+            && attempts < 3
+        {
+            attempts += 1;
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        } else {
+            break output;
+        }
+    };
     if !p.status.success() {
         return Err(String::from_utf8_lossy(&p.stderr).into_owned().into());
     }
-    Ok(String::from_utf8(p.stdout)?)
+    let result = Ok(String::from_utf8(p.stdout)?);
+    eprintln!("{result:?}");
+    result
 }
 
-fn ancestor(mut pid: u32, parent: u32) -> bool {
+/// Test process ancestry using the kernel process tree.
+/// Parameters: pid - candidate process; parent - required ancestor.
+/// Returns: whether the candidate descends from the ancestor.
+pub(crate) fn ancestor(mut pid: u32, parent: u32) -> bool {
+    eprintln!("pid={pid}, parent={parent}");
     for _ in 0..64 {
         if pid == parent {
+            eprintln!("true");
             return true;
         }
         let Ok(stat) = fs::read_to_string(format!("/proc/{pid}/stat")) else {
+            eprintln!("false");
             return false;
         };
         let Some(rest) = stat.rsplit_once(')') else {
+            eprintln!("false");
             return false;
         };
         let Some(next) = rest
@@ -34,6 +59,7 @@ fn ancestor(mut pid: u32, parent: u32) -> bool {
             .nth(1)
             .and_then(|s| s.parse().ok())
         else {
+            eprintln!("false");
             return false;
         };
         pid = next;
@@ -41,6 +67,7 @@ fn ancestor(mut pid: u32, parent: u32) -> bool {
             break;
         }
     }
+    eprintln!("false");
     false
 }
 
@@ -228,12 +255,21 @@ pub fn snapshot(socket: &str, name: &str) -> Result<Value> {
     Ok(json!({"socket":socket,"name":name,"windows":windows}))
 }
 
+/// Restore a missing session with saved pane replay helpers, preserving active sessions.
+/// Parameters: session - saved structure and optional durable pane descriptors.
+/// Returns: successful creation or reuse of the saved session.
 pub fn restore(session: &Value) -> Result<()> {
+    eprintln!("session={session}");
     let socket = text(session, "socket");
     let name = text(session, "name");
     let exact = format!("={name}");
     if run(socket, &["has-session", "-t", &exact]).is_ok() {
-        return Ok(());
+        if session["replace_empty"] == true && fresh_empty(session)? {
+            run(socket, &["kill-session", "-t", &exact])?;
+        } else {
+            eprintln!("Ok(())");
+            return Ok(());
+        }
     }
     if let Some(parent) = Path::new(socket).parent() {
         fs::create_dir_all(parent)?;
@@ -260,7 +296,7 @@ pub fn restore(session: &Value) -> Result<()> {
         };
         let cwd = dir(&panes[0]);
         let wid = if i == 0 {
-            run(
+            create_pane(
                 socket,
                 &[
                     "new-session",
@@ -275,9 +311,10 @@ pub fn restore(session: &Value) -> Result<()> {
                     "-c",
                     &cwd,
                 ],
+                &panes[0],
             )?
         } else {
-            run(
+            create_pane(
                 socket,
                 &[
                     "new-window",
@@ -292,6 +329,7 @@ pub fn restore(session: &Value) -> Result<()> {
                     "-c",
                     &cwd,
                 ],
+                &panes[0],
             )?
         };
         let wid = wid.trim();
@@ -307,7 +345,7 @@ pub fn restore(session: &Value) -> Result<()> {
             )?;
         }
         for p in &panes[1..] {
-            run(socket, &["split-window", "-d", "-t", wid, "-c", &dir(p)])?;
+            create_pane(socket, &["split-window", "-d", "-t", wid, "-c", &dir(p)], p)?;
             run(socket, &["select-layout", "-t", wid, "tiled"])?;
         }
         let _ = run(socket, &["select-layout", "-t", wid, text(w, "layout")]);
@@ -324,5 +362,77 @@ pub fn restore(session: &Value) -> Result<()> {
     if !active.is_empty() {
         run(socket, &["select-window", "-t", &active])?;
     }
+    eprintln!("Ok(())");
     Ok(())
+}
+
+/// Append native replay arguments when creating a saved pane.
+/// Parameters: socket - server path; args - tmux creation operands; pane - saved pane descriptor.
+/// Returns: command stdout or a creation error.
+fn create_pane(socket: &str, args: &[&str], pane: &Value) -> Result<String> {
+    eprintln!("socket={socket}, args={args:?}, pane={pane}");
+    let mut argv: Vec<String> = args.iter().map(|s| (*s).into()).collect();
+    if let Some(path) = pane["restore"].as_str() {
+        argv.extend([
+            crate::continuity::executable()?
+                .to_string_lossy()
+                .into_owned(),
+            "_restore-pane".into(),
+            path.into(),
+        ]);
+    }
+    let result = run(socket, &argv.iter().map(String::as_str).collect::<Vec<_>>());
+    eprintln!("{result:?}");
+    result
+}
+
+/// Recognize a single fresh idle shell created before the checkpoint is restored.
+/// Parameters: session - checkpoint carrying the previous server identity.
+/// Returns: whether replacement is safe without discarding active work.
+fn fresh_empty(session: &Value) -> Result<bool> {
+    eprintln!("session={session}");
+    let socket = text(session, "socket");
+    let target = format!("={}", text(session, "name"));
+    if crate::continuity::epoch(socket, &target)? == text(session, "epoch") {
+        eprintln!("false");
+        return Ok(false);
+    }
+    let panes = run(
+        socket,
+        &[
+            "list-panes",
+            "-s",
+            "-t",
+            &target,
+            "-F",
+            "#{pane_pid}\t#{pane_current_command}\t#{history_size}\t#{@tws-record-path}",
+        ],
+    )?;
+    let fields: Vec<_> = panes.trim_end_matches('\n').split('\t').collect();
+    let result = if panes.lines().count() != 1
+        || fields.len() != 4
+        || fields[2] != "0"
+        || !fields[3].is_empty()
+        || !["bash", "zsh", "fish", "sh"].contains(&fields[1])
+    {
+        false
+    } else {
+        let pid = fields[0].parse::<u32>()?;
+        let mut content = String::new();
+        let mut children = String::new();
+        for _ in 0..20 {
+            children =
+                fs::read_to_string(format!("/proc/{pid}/task/{pid}/children")).unwrap_or_default();
+            content = run(socket, &["capture-pane", "-p", "-t", &format!("{target}:")])?;
+            if !content.trim().is_empty() && children.trim().is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        children.trim().is_empty()
+            && content.lines().filter(|s| !s.trim().is_empty()).count() <= 4
+            && content.trim_end().ends_with(['$', '#', '%', '>'])
+    };
+    eprintln!("{result:?}");
+    Ok(result)
 }

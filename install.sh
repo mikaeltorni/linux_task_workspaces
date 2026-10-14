@@ -79,6 +79,8 @@ After=graphical-session.target
 PartOf=graphical-session.target
 [Service]
 ExecStart="$TARGET_HOME/.local/bin/tws" _watch
+ExecStop="$TARGET_HOME/.local/bin/tws" _checkpoint-all
+KillMode=process
 Restart=on-failure
 RestartSec=10
 [Install]
