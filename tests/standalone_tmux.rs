@@ -261,3 +261,114 @@ fn discovers_client_socket_label() {
     assert_eq!(saved["windows"][0]["tmux"][0]["socket"], fixture.socket);
     eprintln!("None");
 }
+
+/// Keep a managed terminal stationary during watcher ticks while retaining explicit restoration.
+/// Parameters: none.
+/// Returns: None; checks geometry, restored identities, workspace binding and missing-window recovery.
+#[test]
+fn watcher_preserves_existing_terminal_geometry() {
+    eprintln!("parameters=none");
+    let fixture = Fixture::new();
+    let store = Store {
+        root: fixture.root.path().join("profiles"),
+    };
+    let pid = fixture.clients.borrow()[0].id();
+    let saved_rect = json!([3840, 3440, 2160, 1896]);
+    let live_rect = json!([3840, 1544, 2160, 1264]);
+    let mut terminal = window("task", "kitty", pid);
+    terminal["workspace"] = json!(1);
+    terminal["monitor"] = json!("HDMI-0");
+    terminal["rect"] = saved_rect.clone();
+    fixture.state.borrow_mut()["active"] = json!(1);
+    fixture.state.borrow_mut()["monitors"] = json!([
+        {"connector":"DP-0","index":0,"x":0,"y":0,"width":3840,"height":2160},
+        {"connector":"DP-4","index":1,"x":0,"y":2160,"width":3840,"height":2160},
+        {"connector":"HDMI-0","index":2,"x":3840,"y":1544,"width":2160,"height":3840}
+    ]);
+    fixture.state.borrow_mut()["windows"] = json!([terminal]);
+    call(
+        &["configure", "backup", "--workspace", "2"],
+        &store,
+        &fixture,
+    )
+    .unwrap();
+    let panes = fixture.tmux(&["list-panes", "-t", "=backups", "-F", "#{pane_pid}"]);
+
+    // Simulate normal use after login, including a new window identity after reboot.
+    for identity in ["task", "after-reboot"] {
+        fixture.state.borrow_mut()["windows"][0]["id"] = json!(identity);
+        fixture.state.borrow_mut()["windows"][0]["rect"] = live_rect.clone();
+        fixture.state.borrow_mut()["windows"][0]["maximized"] = json!(3);
+        for _ in 0..3 {
+            fixture.actions.borrow_mut().clear();
+            call(&["_startup"], &store, &fixture).unwrap();
+            assert!(
+                !fixture.actions.borrow().iter().any(|a| a["op"] == "place" || a["op"] == "focus" || a.get("launch").is_some()),
+                "watcher must not move, resize, unmaximize or relaunch an existing terminal on its assigned workspace"
+            );
+            assert_eq!(fixture.state.borrow()["windows"][0]["rect"], live_rect);
+            assert_eq!(fixture.state.borrow()["windows"][0]["maximized"], 3);
+        }
+    }
+    let profile: Value =
+        serde_json::from_str(&call(&["backup", "show"], &store, &fixture).unwrap()).unwrap();
+    assert_eq!(profile["windows"][0]["rect"], saved_rect);
+    assert_eq!(profile["windows"][0]["id"], "after-reboot");
+    assert!(store
+        .root
+        .join(".continuity/backup/checkpoint.json")
+        .exists());
+
+    fixture.actions.borrow_mut().clear();
+    call(&["backup", "load"], &store, &fixture).unwrap();
+    assert!(fixture
+        .actions
+        .borrow()
+        .iter()
+        .any(|a| a["op"] == "place" && a["window"]["rect"] == saved_rect));
+    assert!(fixture.actions.borrow().iter().any(|a| a["op"] == "focus"));
+
+    // An attached client opened on another workspace still returns to its task.
+    fixture.state.borrow_mut()["windows"][0]["workspace"] = json!(0);
+    fixture.actions.borrow_mut().clear();
+    call(&["_startup"], &store, &fixture).unwrap();
+    assert_eq!(fixture.state.borrow()["windows"][0]["workspace"], 1);
+    assert!(fixture
+        .actions
+        .borrow()
+        .iter()
+        .any(|a| a["op"] == "place" && a["window"]["rect"] == saved_rect));
+    assert!(!fixture.actions.borrow().iter().any(|a| a["op"] == "focus"));
+
+    // A missing GUI client is reopened and placed, preserving its live tmux job.
+    fixture.state.borrow_mut()["windows"] = json!([]);
+    fixture.actions.borrow_mut().clear();
+    call(&["_startup"], &store, &fixture).unwrap();
+    assert_eq!(fixture.state.borrow()["windows"][0]["workspace"], 1);
+    assert_eq!(
+        fixture
+            .actions
+            .borrow()
+            .iter()
+            .filter(|a| a.get("launch").is_some())
+            .count(),
+        1
+    );
+    assert!(fixture
+        .actions
+        .borrow()
+        .iter()
+        .any(|a| a["op"] == "place" && a["id"] == "restored"));
+    assert_eq!(
+        fixture.tmux(&["list-panes", "-t", "=backups", "-F", "#{pane_pid}"]),
+        panes
+    );
+    fixture.actions.borrow_mut().clear();
+    call(&["_startup"], &store, &fixture).unwrap();
+    assert!(!fixture
+        .actions
+        .borrow()
+        .iter()
+        .any(|a| a["op"] == "place" || a.get("launch").is_some()));
+    eprintln!("None");
+}

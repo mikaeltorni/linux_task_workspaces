@@ -1006,8 +1006,15 @@ fn tmux_contract() {
             .iter()
             .filter(|a| a["op"] == "place" && a["workspace"] == 2)
             .count(),
-        2
+        1,
+        "only the ordinary application still needs placement during maintenance"
     );
+    assert!(!actions
+        .iter()
+        .any(|a| a["op"] == "place" && a["id"] == "42"));
+    assert!(actions
+        .iter()
+        .any(|a| a["op"] == "place" && a["id"] == "43"));
     assert!(!actions.iter().any(|a| a["op"] == "focus"));
     drop(actions);
     assert_eq!(
