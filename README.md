@@ -151,6 +151,14 @@ close asks those application windows to close, keeping detached tmux jobs alive.
 Either suspends automatic reopening until the next open action. `_dismiss ID`,
 `_startup`, and `_watch` are internal shortcut/service entrypoints.
 
+Once a tmux terminal is on its assigned workspace, background reconciliation
+leaves its current monitor, position, size and maximized/fullscreen state alone.
+This prevents the 20-second watcher from repeatedly moving or resizing a terminal
+during normal work. Newly opened terminals and clients returning from another
+workspace still receive the saved placement. `tws ID load` explicitly restores
+the saved layout even for existing terminals; `tws ID save` records an updated
+layout for future restoration.
+
 After login, the watcher can start before GNOME's bridge or display environment
 is ready. It retries reconciliation as the session becomes available. Before
 launching an application, `tws` fetches the current systemd user manager's desktop
