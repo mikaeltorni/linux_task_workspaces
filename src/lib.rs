@@ -370,8 +370,8 @@ fn bind_existing_tmux_windows(profile: &Value, bridge: &dyn Bridge) -> Result<Ve
     result
 }
 
-/// Restore eligible task windows, matching tmux clients by socket and session.
-/// Parameters: profile - saved task updated with live identities; bridge - desktop operations; focus - whether to activate its slot.
+/// Restore task windows while leaving correctly bound tmux clients stationary on watcher ticks.
+/// Parameters: profile - saved task updated with live identities; bridge - desktop operations; focus - explicitly restore saved geometry and activate the slot, otherwise maintain existing tmux placement.
 /// Returns: restored window identities, or a restoration error.
 pub fn restore_windows(
     profile: &mut Value,
@@ -400,7 +400,8 @@ pub fn restore_windows(
             tmux::restore(session)?;
         }
         let mut found = matching_window(saved, &current, &used, &workspace)?;
-        if found.is_none() {
+        let launched = found.is_none();
+        if launched {
             let before: Vec<String> = current.iter().map(|w| text(w, "id").to_owned()).collect();
             bridge.launch(&command_argv(saved)?)?;
             let timeout = std::env::var("TWS_WINDOW_TIMEOUT")
@@ -440,7 +441,9 @@ pub fn restore_windows(
                 text(saved, "title")
             )
         })?;
-        bridge.action(json!({"op":"place", "id":w["id"], "workspace":workspace, "window":saved, "monitors":monitors}))?;
+        if focus || sessions.is_empty() || launched || w["workspace"] != workspace {
+            bridge.action(json!({"op":"place", "id":w["id"], "workspace":workspace, "window":saved, "monitors":monitors}))?;
+        }
         used.push(text(&w, "id").into());
         saved["id"] = w["id"].clone();
         saved["pid"] = w["pid"].clone();
