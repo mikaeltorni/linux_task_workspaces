@@ -202,13 +202,29 @@ tasks keep recording their existing sessions without reopening their windows.
 Missing sessions do not overwrite their last usable checkpoint with empty state.
 
 Once checkpointing starts, pane output streams to private files and synchronizes
-each received chunk. Recovery displays the captured tmux history followed by
+each received chunk. The first checkpoint captures complete pane history.
+Later checkpoints reuse that durable base and its original stream offset while
+saving the current layout, directories and supported jobs. They do not copy
+the full scrollback every 20 seconds, which would block typing on the shared
+tmux server for large histories. Each generation links its base capture so
+pruning older generations preserves recovery. Legacy checkpoints upgrade on
+their next capture; an interrupted recorder, changed stream identity or
+detected truncation establishes a fresh base.
+
+Recovery displays the captured tmux history followed by
 output recorded after that capture. Displayed text is never submitted as shell
 input. There can be slight overlap at the capture boundary. Live sessions keep
 their existing processes; a single fresh idle shell created before restoration
 can be recovered when its server generation differs from the saved checkpoint.
 Active jobs and user-owned `pipe-pane` collectors are preserved; a foreign collector
 causes an explicit checkpoint error rather than being replaced.
+
+The same behavior applies to `tws ID checkpoint`, `tws ID save`, the `_watch`
+service and its `_checkpoint-all` stop action. After installing an updated
+`tws` binary, activate it silently with
+`systemctl --user restart task-workspaces.service` and verify it with
+`systemctl --user is-active task-workspaces.service`. Existing tmux jobs remain
+running during this service restart.
 
 Private state lives under `TWS_CONFIG_HOME/.continuity/ID/` (or the default task
 config directory). `checkpoint.json` is atomic and synchronized; a validated
