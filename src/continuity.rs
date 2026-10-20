@@ -3,7 +3,7 @@ use serde_json::{json, Value};
 use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -159,7 +159,157 @@ pub(crate) fn epoch(socket: &str, target: &str) -> Result<String> {
     Ok(result)
 }
 
-/// Snapshot only live sessions belonging to this saved task and attach durable output streams.
+/// Select a valid base capture whose output stream has remained continuous.
+/// Parameters: previous - validated prior task checkpoint; stream - current pane stream; metadata - current stream identity and length.
+/// Returns: the reusable capture path and original stream offset, or no match requiring a fresh capture.
+fn reusable_capture(
+    previous: Option<&Value>,
+    stream: &Path,
+    metadata: &fs::Metadata,
+) -> Option<(PathBuf, u64)> {
+    eprintln!("previous={previous:?}, stream={stream:?}, metadata={metadata:?}");
+    let mut result = None;
+    for session in previous
+        .into_iter()
+        .flat_map(|p| p["sessions"].as_array())
+        .flatten()
+    {
+        for window in session["windows"].as_array().into_iter().flatten() {
+            for pane in window["panes"].as_array().into_iter().flatten() {
+                let Ok(saved) = descriptor(Path::new(text(pane, "restore"))) else {
+                    continue;
+                };
+                if Path::new(text(&saved, "stream")) == stream
+                    && saved["stream_device"].as_u64() == Some(metadata.dev())
+                    && saved["stream_inode"].as_u64() == Some(metadata.ino())
+                    && saved["stream_length"]
+                        .as_u64()
+                        .is_some_and(|length| metadata.len() >= length)
+                    && saved["offset"]
+                        .as_u64()
+                        .is_some_and(|offset| metadata.len() >= offset)
+                {
+                    result = Some((
+                        PathBuf::from(text(&saved, "capture")),
+                        saved["offset"].as_u64().unwrap(),
+                    ));
+                }
+            }
+        }
+    }
+    eprintln!("{result:?}");
+    result
+}
+
+/// Require ownership before attaching or replacing a pane's output pipe.
+/// Parameters: active - whether a pipe exists; registered - current ownership path; stream - required managed stream; pane - pane named in a rejection.
+/// Returns: success for an absent or managed pipe, retaining foreign collectors on rejection.
+fn require_managed_pipe(active: bool, registered: &str, stream: &Path, pane: &str) -> Result<()> {
+    eprintln!("active={active}, registered={registered}, stream={stream:?}, pane={pane}");
+    if active && registered != stream.to_string_lossy() {
+        return Err(format!("Pane {pane} already has a foreign output pipe; leave it intact or stop it before checkpointing").into());
+    }
+    eprintln!("Ok(())");
+    Ok(())
+}
+
+/// Attach or replace an already ownership-checked pane recorder.
+/// Parameters: socket - tmux server; pane - managed pane; stream - durable output destination.
+/// Returns: success after connecting the recorder and recording its ownership.
+fn start_recorder(socket: &str, pane: &str, stream: &Path) -> Result<()> {
+    eprintln!("socket={socket}, pane={pane}, stream={stream:?}");
+    OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(0o600)
+        .open(stream)?
+        .sync_all()?;
+    let binary = executable()?;
+    let quote = |s: &str| format!("'{}'", s.replace('\'', "'\\''"));
+    let pipe = format!(
+        "exec {} _record-pane {}",
+        quote(&binary.to_string_lossy()),
+        quote(&stream.to_string_lossy())
+    );
+    tmux::run(socket, &["pipe-pane", "-t", pane, &pipe])?;
+    tmux::run(
+        socket,
+        &[
+            "set-option",
+            "-p",
+            "-t",
+            pane,
+            "@tws-record-path",
+            &stream.to_string_lossy(),
+        ],
+    )?;
+    eprintln!("Ok(())");
+    Ok(())
+}
+
+/// Preserve one base capture while subsequent pane output remains in its durable stream.
+/// Parameters: socket - tmux server; pane - exact live pane; capture - new generation's base path; stream - durable pane output; previous - validated prior checkpoint; continuous - whether the managed recorder was already attached.
+/// Returns: replay metadata retaining the original offset when its base is reused.
+fn save_capture(
+    socket: &str,
+    pane: &str,
+    capture: &Path,
+    stream: &Path,
+    previous: Option<&Value>,
+    continuous: bool,
+) -> Result<Value> {
+    eprintln!("socket={socket}, pane={pane}, capture={capture:?}, stream={stream:?}, previous={previous:?}, continuous={continuous}");
+    let metadata = fs::metadata(stream)?;
+    let reusable = if continuous {
+        reusable_capture(previous, stream, &metadata)
+    } else {
+        None
+    };
+    let offset = if let Some((source, offset)) = reusable {
+        // Each generation owns a link, so pruning older generations cannot
+        // remove a base still needed by the current or fallback checkpoint.
+        fs::hard_link(source, capture)?;
+        File::open(capture)?.sync_all()?;
+        offset
+    } else {
+        if continuous {
+            // A replaced stream may still have an old recorder writing to its
+            // unlinked inode. Reconnect before establishing the new base.
+            start_recorder(socket, pane, stream)?;
+        }
+        let file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .mode(0o600)
+            .open(capture)?;
+        let status = Command::new("tmux")
+            .args([
+                "-S",
+                socket,
+                "capture-pane",
+                "-e",
+                "-p",
+                "-S",
+                "-",
+                "-t",
+                pane,
+            ])
+            .stdout(file.try_clone()?)
+            .stderr(Stdio::piped())
+            .output()?;
+        if !status.status.success() {
+            return Err("Failed to capture tmux pane history".into());
+        }
+        file.sync_all()?;
+        metadata.len()
+    };
+    let result = json!({"version":1,"capture":capture,"stream":stream,"offset":offset,
+        "stream_device":metadata.dev(),"stream_inode":metadata.ino(),"stream_length":metadata.len()});
+    eprintln!("{result:?}");
+    Ok(result)
+}
+
+/// Snapshot live task structure, reusing durable bases while pane recording stays continuous.
 /// Parameters: store - private task store; profile - saved task identity and session bindings.
 /// Returns: success without modifying the saved GUI layout or replacing missing sessions.
 pub(crate) fn checkpoint(store: &Store, profile: &Value) -> Result<()> {
@@ -238,75 +388,31 @@ pub(crate) fn checkpoint(store: &Store, profile: &Value) -> Result<()> {
                     &["show-options", "-p", "-v", "-t", pane, "@tws-record-path"],
                 )
                 .unwrap_or_default();
-                if fields[3] == "1" && registered.trim() != stream.to_string_lossy() {
-                    return Err(format!("Pane {pane} already has a foreign output pipe; leave it intact or stop it before checkpointing").into());
+                let continuous = fields[3] == "1";
+                require_managed_pipe(continuous, registered.trim(), &stream, pane)?;
+                if !continuous {
+                    start_recorder(socket, pane, &stream)?;
                 }
-                if fields[3] != "1" {
-                    OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .mode(0o600)
-                        .open(&stream)?
-                        .sync_all()?;
-                    let binary = executable()?;
-                    let quote = |s: &str| format!("'{}'", s.replace('\'', "'\\''"));
-                    let pipe = format!(
-                        "exec {} _record-pane {}",
-                        quote(&binary.to_string_lossy()),
-                        quote(&stream.to_string_lossy())
-                    );
-                    tmux::run(socket, &["pipe-pane", "-o", "-t", pane, &pipe])?;
-                    tmux::run(
-                        socket,
-                        &[
-                            "set-option",
-                            "-p",
-                            "-t",
-                            pane,
-                            "@tws-record-path",
-                            &stream.to_string_lossy(),
-                        ],
-                    )?;
-                }
-                let offset = fs::metadata(&stream)?.len();
                 let capture = generation.join(format!(
                     "session-{}-{}.ansi",
                     sessions.len(),
                     pane.trim_start_matches('%')
                 ));
-                let file = OpenOptions::new()
-                    .create_new(true)
-                    .write(true)
-                    .mode(0o600)
-                    .open(&capture)?;
-                let status = Command::new("tmux")
-                    .args([
-                        "-S",
-                        socket,
-                        "capture-pane",
-                        "-e",
-                        "-p",
-                        "-S",
-                        "-",
-                        "-t",
-                        pane,
-                    ])
-                    .stdout(file.try_clone()?)
-                    .stderr(Stdio::piped())
-                    .output()?;
-                if !status.status.success() {
-                    return Err("Failed to capture tmux pane history".into());
-                }
-                file.sync_all()?;
+                let mut replay = save_capture(
+                    socket,
+                    pane,
+                    &capture,
+                    &stream,
+                    previous.as_ref(),
+                    continuous,
+                )?;
+                replay["jobs"] = json!(harbor::discover(pid)?);
                 let restore = generation.join(format!(
                     "session-{}-{}.json",
                     sessions.len(),
                     pane.trim_start_matches('%')
                 ));
-                atomic(
-                    &restore,
-                    &json!({"version":1,"capture":capture,"stream":stream,"offset":offset,"jobs":harbor::discover(pid)?}),
-                )?;
+                atomic(&restore, &replay)?;
                 let window = snapshot["windows"]
                     .as_array_mut()
                     .unwrap()
