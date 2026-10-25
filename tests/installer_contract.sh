@@ -9,7 +9,8 @@ fixture=$(mktemp -d)
 trap 'rm -rf "$fixture"' EXIT
 mkdir -p "$fixture/repo" "$fixture/home" "$fixture/bin" "$fixture/framework"
 cp "$root/install.sh" "$root/Cargo.toml" "$fixture/repo/"
-cp -r "$root/extension" "$fixture/repo/"
+cp -r "$root/extension" "$root/installer" "$root/.installer-support" "$fixture/repo/"
+cp -r "$root/.installer-support/." "$fixture/framework/"
 export TWS_INSTALL_HOME="$fixture/home" ISC_FUNCTIONS_DIR="$fixture/framework"
 export TWS_TEST_BINARY="$1" TWS_TEST_CALLS="$fixture/calls"
 export PATH="$fixture/bin:/usr/bin:/bin"
@@ -35,11 +36,19 @@ CARGO
 chmod +x "$HOME/.cargo/bin/cargo"
 BOOTSTRAP
 SCRIPT
-cat > "$fixture/framework/component_loader.sh" <<'HELPERS'
-isc_load_helpers() {
-    run_as_target() { env HOME="$TARGET_HOME" "$@"; }
-    is_root() { return 1; }
+cat > "$fixture/framework/installer_helpers.sh" <<'HELPERS'
+# Run a fixture command with isolated user context.
+# Parameters: $@ - command and arguments. Returns: command exit status.
+run_as_target() {
+    printf 'arguments=%s\n' "$*" >&2
+    local status=0
+    env HOME="$TARGET_HOME" "$@" || status=$?
+    printf '%s\n' "$status" >&2
+    return "$status"
 }
+# Emulate a non-root installation.
+# Parameters: none. Returns: one.
+is_root() { printf 'parameters=none\n1\n' >&2; return 1; }
 HELPERS
 for name in gsettings gnome-extensions systemctl dpkg-query; do
     cat > "$fixture/bin/$name" <<'COMMAND'
@@ -50,7 +59,7 @@ if [[ "${0##*/}" == gsettings ]]; then printf "['task-workspaces@local']\n"; fi
 COMMAND
 done
 chmod +x "$fixture/bin/"*
-ISC_FUNCTIONS_DIR="$fixture/missing" bash "$fixture/repo/install.sh" --help
+bash "$fixture/repo/install.sh" --help
 [[ ! -e "$TWS_TEST_CALLS" ]]
 bash "$fixture/repo/install.sh"
 [[ $(rg -c '^rustup$' "$TWS_TEST_CALLS") == 1 ]]

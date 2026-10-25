@@ -29,15 +29,25 @@ if "$bin" configure --launcher Super+W; then exit 1; fi
 fixture=$(mktemp -d)
 trap 'rm -rf "$fixture"' EXIT
 mkdir -p "$fixture/bin" "$fixture/framework"
+root=$(cd "$(dirname "$0")/.." && pwd)
+cp -r "$root/.installer-support/." "$fixture/framework/"
 for name in systemctl gnome-extensions; do
     printf '#!/bin/bash\nexit 0\n' > "$fixture/bin/$name"
     chmod +x "$fixture/bin/$name"
 done
-cat > "$fixture/framework/component_loader.sh" <<'HELPERS'
-isc_load_helpers() {
-    run_as_target() { "$@"; }
-    is_root() { return 1; }
+cat > "$fixture/framework/installer_helpers.sh" <<'HELPERS'
+# Run a fixture command with isolated user context.
+# Parameters: $@ - command and arguments. Returns: command exit status.
+run_as_target() {
+    printf 'arguments=%s\n' "$*" >&2
+    local status=0
+    "$@" || status=$?
+    printf '%s\n' "$status" >&2
+    return "$status"
 }
+# Emulate a non-root installation.
+# Parameters: none. Returns: one.
+is_root() { printf 'parameters=none\n1\n' >&2; return 1; }
 HELPERS
 export ISC_FUNCTIONS_DIR="$fixture/framework" TWS_INSTALL_HOME="$HOME" TWS_BINARY="$bin"
 export PATH="$fixture/bin:$PATH"
