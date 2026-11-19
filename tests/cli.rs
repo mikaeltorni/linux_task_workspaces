@@ -779,8 +779,12 @@ fn rejections() {
     assert!(call(&[], &store, &desktop).unwrap().contains("tws"));
 }
 
+/// Verify the bundled installer deploys a usable CLI in a clean home.
+/// Parameters: none.
+/// Returns: None.
 #[test]
 fn installed_entrypoint() {
+    eprintln!("parameters=none");
     assert!(Command::new("bash")
         .arg("tests/installer_contract.sh")
         .arg(env!("CARGO_BIN_EXE_tws"))
@@ -788,18 +792,13 @@ fn installed_entrypoint() {
         .unwrap()
         .success());
     let temp = tempfile::tempdir().unwrap();
-    let framework = temp.path().join("framework");
-    std::fs::create_dir(&framework).unwrap();
-    std::fs::write(
-        framework.join("component_loader.sh"),
-        "isc_load_helpers() { :; }\nrun_as_target() { \"$@\"; }\nis_root() { return 1; }\n",
-    )
-    .unwrap();
     let p = Command::new("bash")
         .arg("install.sh")
         .env("TWS_INSTALL_HOME", temp.path())
         .env("TWS_INSTALL_OFFLINE", "1")
-        .env("ISC_FUNCTIONS_DIR", &framework)
+        .env_remove("ISC_FUNCTIONS_DIR")
+        .env_remove("ISC_COMPONENT_LIB_DIR")
+        .args(["--select", "task_workspaces"])
         .env("TWS_BINARY", env!("CARGO_BIN_EXE_tws"))
         .output()
         .unwrap();
@@ -814,6 +813,7 @@ fn installed_entrypoint() {
         .path()
         .join(".local/share/gnome-shell/extensions/task-workspaces@local/extension.js")
         .exists());
+    eprintln!("None");
 }
 
 /// Check real tmux structure, process reuse and assigned startup placement.
