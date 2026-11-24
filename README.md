@@ -1,7 +1,25 @@
-# Linux Task Workspaces
+# Linux Task Workspaces — GNOME workspace and tmux snapshot CLI
 
-Rust CLI for named GNOME workspace window layouts, monitor positions, and durable
-tmux sessions with saved pane output. Standalone, user-owned installation for Ubuntu/GNOME 45–48.
+Linux Task Workspaces is a GNOME workspace and tmux snapshot CLI for users who want to save
+and restore named window layouts, monitors, and terminal sessions.
+
+[![Last commit: 2026-11-19](docs/badges/last-commit.svg)](https://github.com/mikaeltorni/linux_task_workspaces/commits/main) [![Commits in 30 days: 2 as of 2026-11-25](docs/badges/commit-activity.svg)](https://github.com/mikaeltorni/linux_task_workspaces/graphs/commit-activity) [![Open issues: 0 as of 2026-11-25](docs/badges/issues.svg)](https://github.com/mikaeltorni/linux_task_workspaces/issues)
+
+Activity snapshot from GitHub’s default branch on 2026-11-25.
+
+[Tmux continuity](#tmux-continuity-after-reboot) · [Installer commands](#installer-lifecycle) · [MIT license](LICENSE)
+
+## Quick start
+
+Run as the desktop user. Building the CLI requires Rust and a C linker. Terminal restoration uses tmux.
+
+```bash
+bash install.sh --list-components
+bash install.sh --select task_workspaces
+~/.local/bin/tws --help
+```
+
+The Ubuntu 24.04.5 GNOME 46 X11 workstation VM verified the installed `tws` command and its user service.
 
 ## Disclaimer
 
@@ -13,8 +31,8 @@ The authors and copyright holders make no guarantees regarding security, reliabi
 
 This notice is intended to clarify the nature of the project and does not impose additional restrictions beyond the MIT License.
 
-Install: `bash install.sh` (also `--default` / `--all`). The installer uses the
-shared installer helpers from a sibling checkout or downloads them. User mode
+Install: `bash install.sh` (also `--default` / `--all`). The installer loads the
+licensed framework packaged in `.installer-support/`. User mode
 reports exact sudo commands for missing packages; sudo targets the desktop user.
 The public entrypoint is the compiled binary `~/.local/bin/tws`. Building requires
 a Rust 1.85+ toolchain. A missing toolchain is bootstrapped with rustup into the
