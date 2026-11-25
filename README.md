@@ -3,11 +3,13 @@
 Linux Task Workspaces is a GNOME workspace and tmux snapshot CLI for users who want to save
 and restore named window layouts, monitors, and terminal sessions.
 
-[![Last commit: 2026-11-19](docs/badges/last-commit.svg)](https://github.com/mikaeltorni/linux_task_workspaces/commits/main) [![Commits in 30 days: 2 as of 2026-11-25](docs/badges/commit-activity.svg)](https://github.com/mikaeltorni/linux_task_workspaces/graphs/commit-activity) [![Open issues: 0 as of 2026-11-25](docs/badges/issues.svg)](https://github.com/mikaeltorni/linux_task_workspaces/issues)
-
-Activity snapshot from GitHub’s default branch on 2026-11-25.
+[![Last commit](https://img.shields.io/github/last-commit/mikaeltorni/linux_task_workspaces)](https://github.com/mikaeltorni/linux_task_workspaces/commits/main)
+[![Commit activity](https://img.shields.io/github/commit-activity/m/mikaeltorni/linux_task_workspaces)](https://github.com/mikaeltorni/linux_task_workspaces/graphs/commit-activity)
+[![Issues](https://img.shields.io/github/issues/mikaeltorni/linux_task_workspaces)](https://github.com/mikaeltorni/linux_task_workspaces/issues)
 
 [Tmux continuity](#tmux-continuity-after-reboot) · [Installer commands](#installer-lifecycle) · [MIT license](LICENSE)
+
+[Linux Workspaces Setup](https://github.com/mikaeltorni/linux_workspaces_setup) manages general GNOME workspace behavior. Use `tws` to save and restore a named layout.
 
 ## Quick start
 
@@ -345,6 +347,28 @@ Capture/restoration diagnostics print parameters and results to stderr; CLI
 output, including `tws ID show` JSON, stays on stdout.
 
 MIT licensed; see [LICENSE](LICENSE).
+
+## GNOME workspace and tmux snapshot CLI FAQ
+
+### How do I create a named task workspace?
+
+From the workspace you want to remember, run `tws create backups`. Use `tws backups show` to inspect its saved state.
+
+### How do I refresh an existing task layout?
+
+Arrange the windows and terminal sessions the way you want them. Run `tws backups save` to update the saved layout for that task.
+
+### Can I assign a task workspace to a numbered GNOME slot?
+
+Run `tws configure backups --workspace 3` to choose workspace 3. Use `tws backups load` to restore its windows into the configured workspace.
+
+### How does this preserve tmux across a restart?
+
+With the task’s continuity configuration, `tws` can record and restore supported pane output and terminal state. The tmux continuity guide describes the retained state and the limits on recovery.
+
+### What tools do I need for standalone installation?
+
+Run the Bash installer as your desktop user. Build the native CLI with Rust and a C linker, and install tmux if you want terminal-session restoration.
 
 ## Installer lifecycle
 
